@@ -33,8 +33,7 @@
 
   ; Width-driven breaking: a list that exceeds 80 columns should
   ; render broken regardless of source bias.
-  (assert-true
-    t
+  (assert-true t
     (String.contains-string?
       &(fmt!
         "(foo aaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccc dddddddddddddddddddddd)")
@@ -100,8 +99,7 @@
 " &(fmt! "(defn foo [x]
   (+ x 1))") "short multi-line defn auto-inlines")
   ; A defn too wide for one line stays broken at +2.
-  (assert-true
-    t
+  (assert-true t
     (String.contains-string?
       &(fmt!
         "(defn really-long-fn-name [argument-one argument-two argument-three] (Int.+ argument-one argument-two argument-three))")
@@ -116,13 +114,11 @@
   (assert-true t (let [once (fmt! "(defn foo [x]
   (+ x 1))")
                        twice (fmt! &once)] (= &once &twice)) "idempotent on multi-line defn")
-  (assert-true
-    t
+  (assert-true t
     (let [once (fmt! "(do x y z)")
           twice (fmt! &once)] (= &once &twice))
     "idempotent on short do")
-  (assert-true
-    t
+  (assert-true t
     (let [once (fmt!
             "(defmodule Math (defn square [x] (* x x)) (defn cube [x] (* (Math.square x) x)))")
           twice (fmt! &once)]
@@ -135,8 +131,7 @@
   ; A wider match breaks pair-aware: each pair on its own line; if a
   ; pair itself is too wide, pattern goes on its own line and result
   ; is indented under it.
-  (assert-true
-    t
+  (assert-true t
     (String.contains-string?
       &(fmt!
         "(match scrutinee (LongPatternA a b c) (do-something a b c) (LongPatternB d e f) (do-other d e f))")
@@ -174,6 +169,28 @@
 b\"
 " &(fmt! "\"a
 b\"") "literal newline inside string stays literal")
+
+  ; CRLF in a string literal stays as `\r\n` escapes so HTTP/Redis
+  ; protocol strings don't get mangled into a raw CR + newline.
+  (assert-equal t "\"$-1\\r\\n\"
+" &(fmt! "\"$-1\\r\\n\"") "CRLF in string round-trips as escape pair")
+
+  ; deftype: plain field array is pair-aware — each (name type) pair
+  ; stays on one line even when the array spans multiple lines.
+  (assert-equal t "(deftype URI [scheme (Maybe String)
+              host (Maybe String)
+              port (Maybe Int)])
+" &(fmt!
+      "(deftype URI [scheme (Maybe String) host (Maybe String) port (Maybe Int)])") "deftype fields render pair-aware")
+
+  ; assert-equal keeps its state arg (`test`) on the head line so
+  ; the test idiom reads naturally even when wrapped.
+  (assert-equal t "(assert-equal test
+  \"expected-result-string\"
+  &(some-function arg1 arg2)
+  \"some descriptive message\")
+" &(fmt!
+      "(assert-equal test \"expected-result-string\" &(some-function arg1 arg2) \"some descriptive message\")") "assert-equal keeps state arg on head line")
 
   ; Blank lines inside compound forms are preserved too.
   (assert-equal t "(defmodule M

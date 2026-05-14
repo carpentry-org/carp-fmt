@@ -1,4 +1,4 @@
-(load "git@github.com:carpentry-org/carp-reader@0.3.0")
+(load "git@github.com:carpentry-org/carp-reader@0.3.1")
 (load "git@github.com:carpentry-org/strbuf@0.1.0")
 
 (doc Doc "is the pretty-printer document type. Wadler-style: a tree
@@ -69,6 +69,53 @@ which Carp's defn resolution doesn't allow.")
         (list 'list-bias items)
         (list 'concat-docs 'inner)
         (list 'last-is-cmt? items))))
+
+  (doc pair-aware-arr-doc "expands to the pair-aware rendering for an
+array whose elements pair as `[k1 v1 k2 v2 …]`: each pair is kept on
+one line, pairs are separated by soft breaks, and the second pair
+aligns under the first when the array goes broken. Used for `let`
+bindings and plain-`deftype` field arrays. Same macro-as-helper trick
+as `bracketed-form`.")
+  (defmacro pair-aware-arr-doc [arr]
+    (list
+      'let-do
+      (array 'bn (list 'Array.length arr) 'bparts '(the (Array Doc) []) 'bi 0)
+      (list
+        'while-do
+        (list 'Int.< 'bi 'bn)
+        (list
+          'when
+          (list 'Int.> 'bi 0)
+          (list 'set! 'bparts (list 'Array.push-back 'bparts (list 'space))))
+        (list
+          'set!
+          'bparts
+          (list 'Array.push-back 'bparts (list 'form-at arr 'bi)))
+        (list
+          'when-do
+          (list 'Int.< (list 'Int.inc 'bi) 'bn)
+          (list
+            'set!
+            'bparts
+            (list 'Array.push-back 'bparts (list 'text (list 'copy " "))))
+          (list
+            'set!
+            'bparts
+            (list
+              'Array.push-back
+              'bparts
+              (list 'form-at arr (list 'Int.inc 'bi)))))
+        (list 'set! 'bi (list 'Int.+ 'bi 2)))
+      (list
+        'cat
+        (list 'text (list 'copy "["))
+        (list
+          'cat
+          (list
+            'group
+            (list 'and (list 'list-bias arr) (list 'Int.<= 'bn 2))
+            (list 'align (list 'concat-docs 'bparts)))
+          (list 'text (list 'copy "]"))))))
 
   (doc align "renders `d` with its indent set to the current column.
 Used by pair-aware binding arrays so the second key/value pair lines
@@ -332,6 +379,10 @@ function call.")
       (= name "register") (Maybe.Just 2)
       (= name "defmacro") (Maybe.Just 3)
       (= name "deftest") (Maybe.Just 2)
+      (= name "assert-equal") (Maybe.Just 2)
+      (= name "assert-true") (Maybe.Just 2)
+      (= name "assert-false") (Maybe.Just 2)
+      (= name "with-test") (Maybe.Just 2)
       (Maybe.Nothing)))
 
   (private special-form-of)
@@ -438,42 +489,7 @@ page width.")
                              (Form.Arr bindings)
                                (if (contains-comment? bindings)
                                  (form-at items 1)
-                                 (let-do [bn (Array.length bindings)
-                                          bparts (the (Array Doc) [])
-                                          bi 0]
-                                   (while-do (Int.< bi bn)
-                                     (when (Int.> bi 0)
-                                       (set!
-                                         bparts
-                                         (Array.push-back bparts (space))))
-                                     (set!
-                                       bparts
-                                       (Array.push-back
-                                         bparts
-                                         (form-at bindings bi)))
-                                     (when-do (Int.< (Int.inc bi) bn)
-                                       (set!
-                                         bparts
-                                         (Array.push-back bparts (text @" ")))
-                                       (set!
-                                         bparts
-                                         (Array.push-back
-                                           bparts
-                                           (form-at bindings (Int.inc bi)))))
-                                     (set! bi (Int.+ bi 2)))
-                                   ; A bindings array with two or more
-                                   ; pairs is always rendered broken,
-                                   ; one pair per line, so the
-                                   ; key/value association stays
-                                   ; visually obvious. A single-pair
-                                   ; `[a 1]` may still inline.
-                                   (cat
-                                     (text @"[")
-                                     (cat
-                                       (group
-                                         (and (list-bias bindings) (Int.<= bn 2))
-                                         (align (concat-docs bparts)))
-                                       (text @"]")))))
+                                 (pair-aware-arr-doc bindings))
                              _ (form-at items 1))
                            (form-at items i))]
                   (set!
@@ -509,16 +525,25 @@ page width.")
                                 (nest indent-width (cat (space) result-doc)))))))
                       (set! body-parts (Array.push-back body-parts pattern-doc))))
                   (set! i (Int.+ i 2))))
-              (for [i hlc n]
-                (do
-                  (when-do (Int.> i hlc)
-                    (when (blank-before? items i)
-                      (set! body-parts (Array.push-back body-parts (text @"
+              (let-do [deftype? (head-name-eq? items "deftype")]
+                (for [i hlc n]
+                  (do
+                    (when-do (Int.> i hlc)
+                      (when (blank-before? items i)
+                        (set! body-parts (Array.push-back body-parts (text @"
 "))))
-                    (set! body-parts (Array.push-back body-parts (space))))
-                  (set!
-                    body-parts
-                    (Array.push-back body-parts (form-at items i))))))
+                      (set! body-parts (Array.push-back body-parts (space))))
+                    (let-do [item-doc (if deftype?
+                               ; plain deftype's field array is pair-aware
+                               (match-ref (Located.form
+                                   (Box.peek (Array.unsafe-nth items i)))
+                                 (Form.Arr fields)
+                                   (if (contains-comment? fields)
+                                     (form-at items i)
+                                     (pair-aware-arr-doc fields))
+                                 _ (form-at items i))
+                               (form-at items i))]
+                      (set! body-parts (Array.push-back body-parts item-doc)))))))
             (let [head-doc (concat-docs head-parts)
                   body-doc (concat-docs body-parts)
                   has-body? (Int.< hlc n)
