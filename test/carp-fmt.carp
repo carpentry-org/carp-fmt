@@ -175,6 +175,16 @@ b\"") "literal newline inside string stays literal")
   (assert-equal t "\"$-1\\r\\n\"
 " &(fmt! "\"$-1\\r\\n\"") "CRLF in string round-trips as escape pair")
 
+  ; dict: key/value pairs stay together when the dict spans multiple
+  ; lines, like let bindings and deftype fields.
+  (assert-equal t "{'value l
+ 'type 'def
+ 'name (cadr l)
+ 'bound-to (AST.ann (caddr l))
+ 'static? static?}
+" &(fmt!
+      "{'value l 'type 'def 'name (cadr l) 'bound-to (AST.ann (caddr l)) 'static? static?}") "dict literal renders pair-aware")
+
   ; deftype: plain field array is pair-aware — each (name type) pair
   ; stays on one line even when the array spans multiple lines.
   (assert-equal t "(deftype URI [scheme (Maybe String)

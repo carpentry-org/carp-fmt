@@ -74,9 +74,10 @@ which Carp's defn resolution doesn't allow.")
 array whose elements pair as `[k1 v1 k2 v2 …]`: each pair is kept on
 one line, pairs are separated by soft breaks, and the second pair
 aligns under the first when the array goes broken. Used for `let`
-bindings and plain-`deftype` field arrays. Same macro-as-helper trick
+bindings, plain-`deftype` field arrays, and `Dict` literals. `open`
+and `close` parameterize the delimiters. Same macro-as-helper trick
 as `bracketed-form`.")
-  (defmacro pair-aware-arr-doc [arr]
+  (defmacro pair-aware-arr-doc [arr open close]
     (list
       'let-do
       (array 'bn (list 'Array.length arr) 'bparts '(the (Array Doc) []) 'bi 0)
@@ -108,14 +109,14 @@ as `bracketed-form`.")
         (list 'set! 'bi (list 'Int.+ 'bi 2)))
       (list
         'cat
-        (list 'text (list 'copy "["))
+        (list 'text open)
         (list
           'cat
           (list
             'group
             (list 'and (list 'list-bias arr) (list 'Int.<= 'bn 2))
             (list 'align (list 'concat-docs 'bparts)))
-          (list 'text (list 'copy "]"))))))
+          (list 'text close)))))
 
   (doc align "renders `d` with its indent set to the current column.
 Used by pair-aware binding arrays so the second key/value pair lines
@@ -489,7 +490,7 @@ page width.")
                              (Form.Arr bindings)
                                (if (contains-comment? bindings)
                                  (form-at items 1)
-                                 (pair-aware-arr-doc bindings))
+                                 (pair-aware-arr-doc bindings @"[" @"]"))
                              _ (form-at items 1))
                            (form-at items i))]
                   (set!
@@ -540,7 +541,7 @@ page width.")
                                  (Form.Arr fields)
                                    (if (contains-comment? fields)
                                      (form-at items i)
-                                     (pair-aware-arr-doc fields))
+                                     (pair-aware-arr-doc fields @"[" @"]"))
                                  _ (form-at items i))
                                (form-at items i))]
                       (set! body-parts (Array.push-back body-parts item-doc)))))))
@@ -557,7 +558,10 @@ page width.")
                 (cat (group bias inner) (cat close-doc (text @")")))))))
       (Form.Arr items) (bracketed-form items @"[" @"]")
       (Form.StaticArr items) (bracketed-form items @"$[" @"]")
-      (Form.Dict items) (bracketed-form items @"{" @"}")
+      (Form.Dict items)
+        (if (contains-comment? items)
+          (bracketed-form items @"{" @"}")
+          (pair-aware-arr-doc items @"{" @"}"))
       (Form.Cmt s) (text (fmt ";%s" s))
       _ (text (Form.str f))))
 
