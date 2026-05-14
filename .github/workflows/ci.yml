@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Carp
+        uses: carpentry-org/setup-carp@v1
+
+      - name: Run tests
+        run: |
+          set -euo pipefail
+          carp -x test/carp-fmt.carp
+
+      - name: Build CLI
+        run: carp -b main.carp
+
+      - name: Smoke-test CLI
+        run: |
+          set -euo pipefail
+          # examples/messy.carp is intentionally messy; the formatter
+          # should produce non-empty output that round-trips through
+          # itself idempotently.
+          ./out/carp-fmt examples/messy.carp > /tmp/once.carp
+          ./out/carp-fmt /tmp/once.carp > /tmp/twice.carp
+          diff /tmp/once.carp /tmp/twice.carp
+
+      - name: Install angler
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/carpentry-org/angler /tmp/angler
+          (cd /tmp/angler && carp -b main.carp)
+          sudo install -m 755 /tmp/angler/out/angler /usr/local/bin/
+
+      - name: Lint
+        run: |
+          angler $(find . -name '*.carp' \
+            -not -path './out/*' \
+            -not -path './docs/*' \
+            -not -path './.carp-src/*' \
+            -not -path './examples/*')

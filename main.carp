@@ -1,0 +1,108 @@
+(load "carp-fmt.carp")
+
+(Project.config "title" "carp-fmt")
+
+(private read-file!)
+(hidden read-file!)
+(defn read-file! [path]
+  (match (IO.read->EOF path)
+    (Result.Error e)
+      (do (IO.errorln &(fmt "%s: cannot read file: %s" path &e)) (Maybe.Nothing))
+    (Result.Success src) (Maybe.Just src)))
+
+(private format-or-error!)
+(hidden format-or-error!)
+(defn format-or-error! [path src]
+  (match (Fmt.format-source src)
+    (Result.Error pe)
+      (do
+        (IO.errorln &(fmt "%s: parse error: %s" path &(Parser.format-error &pe)))
+        (Maybe.Nothing))
+    (Result.Success formatted) (Maybe.Just formatted)))
+
+(private write-or-error!)
+(hidden write-or-error!)
+(defn write-or-error! [path content]
+  (match (IO.write-file &content path)
+    (Result.Error e)
+      (do (IO.errorln &(fmt "%s: cannot write file: %s" path &e)) false)
+    (Result.Success _) true))
+
+(private handle-stdout!)
+(hidden handle-stdout!)
+(defn handle-stdout! [path]
+  (match (read-file! path)
+    (Maybe.Nothing) 1
+    (Maybe.Just src)
+      (match (format-or-error! path &src)
+        (Maybe.Nothing) 1
+        (Maybe.Just formatted) (do (IO.print &formatted) 0))))
+
+(private handle-write!)
+(hidden handle-write!)
+(defn handle-write! [path]
+  (match (read-file! path)
+    (Maybe.Nothing) 1
+    (Maybe.Just src)
+      (match (format-or-error! path &src)
+        (Maybe.Nothing) 1
+        (Maybe.Just formatted)
+          (if (= &src &formatted) 0 (if (write-or-error! path formatted) 0 1)))))
+
+(private handle-check!)
+(hidden handle-check!)
+(defn handle-check! [path]
+  (match (read-file! path)
+    (Maybe.Nothing) 1
+    (Maybe.Just src)
+      (match (format-or-error! path &src)
+        (Maybe.Nothing) 1
+        (Maybe.Just formatted)
+          (if (= &src &formatted)
+            0
+            (do (IO.errorln &(fmt "%s: would be reformatted" path)) 1)))))
+
+(private print-help!)
+(hidden print-help!)
+(defn print-help! []
+  (do
+    (IO.println "usage: carp-fmt [OPTIONS] FILE [FILE...]")
+    (IO.println "")
+    (IO.println "options:")
+    (IO.println "  -w, --write      rewrite the file in place")
+    (IO.println "  -c, --check      exit non-zero if any file would change")
+    (IO.println "  -h, --help       show this help")
+    (IO.println "")
+    (IO.println "Default: format each FILE and print to stdout.")))
+
+; `mode`: 0 = stdout, 1 = write, 2 = check
+(defn main []
+  (let-do [argc (StaticArray.length &System.args)
+           files (the (Array String) [])
+           mode 0
+           show-help false
+           i 1]
+    (while (Int.< i argc)
+      (let-do [a (StaticArray.unsafe-nth &System.args i)]
+        (cond
+          (or (= a "-h") (= a "--help")) (set! show-help true)
+          (or (= a "-w") (= a "--write")) (set! mode 1)
+          (or (= a "-c") (= a "--check")) (set! mode 2)
+          (set! files (Array.push-back files @a)))
+        (set! i (Int.inc i))))
+
+    (when-do show-help (print-help!) (System.exit 0))
+    (when-do (Int.= 0 (Array.length &files))
+      (IO.errorln "usage: carp-fmt [OPTIONS] FILE [FILE...]")
+      (System.exit 2))
+
+    (let-do [code 0]
+      (for [j 0 (Array.length &files)]
+        (let [path (Array.unsafe-nth &files j)
+              rc (cond
+                (Int.= mode 1) (handle-write! path)
+                (Int.= mode 2) (handle-check! path)
+                (handle-stdout! path))]
+          (when (Int.> rc code) (set! code rc))))
+      (System.exit code)
+      ())))

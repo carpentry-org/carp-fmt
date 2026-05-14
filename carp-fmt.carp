@@ -1,0 +1,564 @@
+(load "git@github.com:carpentry-org/carp-reader@0.3.0")
+(load "git@github.com:carpentry-org/strbuf@0.1.0")
+
+(doc Doc "is the pretty-printer document type. Wadler-style: a tree
+of text, breakpoints (`DBrk`), and grouped alternatives (`DGrp`).
+`DGrp` carries a `bias` flag that's `true` when the form has no
+structure worth preserving as multi-line (no comments, no blank
+lines) and so may auto-inline if it fits. `DAlign` switches the
+indent to the current column for the inner doc — used by pair-aware
+binding-array rendering.")
+(deftype Doc
+  (DNil [])
+  (DTxt [String])
+  (DBrk [String])
+  (DCat [(Box Doc) (Box Doc)])
+  (DNest [Int (Box Doc)])
+  (DGrp [Bool (Box Doc)])
+  (DAlign [(Box Doc)]))
+
+(doc Fmt "is the formatter. Takes parsed `Located` forms from
+[`carp-reader`](https://github.com/carpentry-org/carp-reader) and
+returns formatted Carp source.")
+(defmodule Fmt
+  (def indent-width 2)
+  (def page-width 80)
+
+  (defn text [s] (Doc.DTxt s))
+  (defn space [] (Doc.DBrk @" "))
+  (defn softln [] (Doc.DBrk @""))
+  (defn cat [a b] (Doc.DCat (Box.init a) (Box.init b)))
+  (defn nest [n d] (Doc.DNest n (Box.init d)))
+  (defn group [bias d] (Doc.DGrp bias (Box.init d)))
+
+  (doc form-at "expands to `(form->doc (Located.form (Box.peek
+(Array.unsafe-nth items i))))`. Used inside `form->doc` to keep the
+recursive-descent call sites compact. A macro rather than a
+function because Carp doesn't resolve forward references between
+defns within a module.")
+  (defmacro form-at [items i]
+    (list
+      'form->doc
+      (list 'Located.form (list 'Box.peek (list 'Array.unsafe-nth items i)))))
+
+  (doc bracketed-form "expands to the inline iteration that renders
+an `Arr` / `StaticArr` / `Dict` body. Same macro-as-helper trick as
+`form-at`: a function would need to mutually recurse with `form->doc`,
+which Carp's defn resolution doesn't allow.")
+  (defmacro bracketed-form [items open close]
+    (list
+      'let-do
+      (array 'n (list 'Array.length items) 'inner '(the (Array Doc) []))
+      (list
+        'for
+        (array 'i 0 'n)
+        (list
+          'do
+          (list
+            'when
+            (list 'Int.> 'i 0)
+            (list 'set! 'inner (list 'Array.push-back 'inner (list 'space))))
+          (list
+            'set!
+            'inner
+            (list 'Array.push-back 'inner (list 'form-at items 'i)))))
+      (list
+        'wrap-children
+        open
+        close
+        (list 'list-bias items)
+        (list 'concat-docs 'inner)
+        (list 'last-is-cmt? items))))
+
+  (doc align "renders `d` with its indent set to the current column.
+Used by pair-aware binding arrays so the second key/value pair lines
+up with the first.")
+  (defn align [d] (Doc.DAlign (Box.init d)))
+
+  (doc concat-docs "concatenates an array of docs in order, with no
+separator between them. Empty array returns `DNil`.")
+  (defn concat-docs [ds]
+    (let-do [n (Array.length &ds)
+             acc (Doc.DNil)]
+      (for [i 0 n] (set! acc (cat acc @(Array.unsafe-nth &ds i))))
+      acc))
+
+  (private text-first-line-info)
+  (hidden text-first-line-info)
+  (doc text-first-line-info "scans a text fragment and returns the
+position of the first `\\n` (or `-1` if none), plus the total length.")
+  (defn text-first-line-info [s]
+    (let-do [n (String.length s)
+             nl-pos -1
+             i 0]
+      (while-do (and (Int.< i n) (Int.< nl-pos 0))
+        (when (Char.= (String.char-at s i) \newline) (set! nl-pos i))
+        (set! i (Int.inc i)))
+      (Pair.init nl-pos n)))
+
+  (doc flat-width "returns the width of `d` rendered flat, measured up
+to (and not including) the first literal newline embedded in any
+`DTxt`. This matches Wadler's `fits?`: a multi-line string is
+acceptable on the current line as long as its FIRST line fits;
+subsequent lines wrap naturally. Returns a `(Pair Int Bool)` of
+`(width has-newline?)`.")
+  (defn flat-width [d]
+    (match-ref d
+      (Doc.DNil) (Pair.init 0 false)
+      (Doc.DTxt s)
+        (let [info (text-first-line-info s)]
+          (if (Int.>= @(Pair.a &info) 0)
+            (Pair.init @(Pair.a &info) true)
+            (Pair.init @(Pair.b &info) false)))
+      (Doc.DBrk s) (Pair.init (String.length s) false)
+      (Doc.DCat a b)
+        (let [fa (flat-width (Box.peek a))]
+          (if @(Pair.b &fa)
+            fa
+            (let [fb (flat-width (Box.peek b))]
+              (Pair.init (Int.+ @(Pair.a &fa) @(Pair.a &fb)) @(Pair.b &fb)))))
+      (Doc.DNest _ inner) (flat-width (Box.peek inner))
+      (Doc.DGrp _ inner) (flat-width (Box.peek inner))
+      (Doc.DAlign inner) (flat-width (Box.peek inner))))
+
+  ; ----------------------------------------------------------------
+  ; Renderer: walks the doc, picking flat or broken per group.
+  ;
+  ; `mode`: 0 = flat (DBrk emits its inline text)
+  ;         1 = broken (DBrk emits newline + indent)
+  ; `indent`: current indent level
+  ; `col`: current column
+  ; `buf`: output StringBuf, mutated in place
+  ; Returns the new column.
+  ; ----------------------------------------------------------------
+
+  (private render-aux)
+  (hidden render-aux)
+  (defn render-aux [d indent col mode buf]
+    (match-ref d
+      (Doc.DNil)
+      col
+      (Doc.DTxt s)
+      (do
+        (StringBuf.append-str buf s)
+        ; A DTxt may contain literal newlines (e.g. multi-line
+        ; string literals). Set col to chars after the last \n
+        ; so subsequent layout uses the right column.
+        (let-do [n (String.length s)
+                 last-nl -1
+                 i 0]
+          (while-do (Int.< i n)
+            (when (Char.= (String.char-at s i) \newline) (set! last-nl i))
+            (set! i (Int.inc i)))
+          (if (Int.>= last-nl 0) (Int.- n (Int.inc last-nl)) (Int.+ col n))))
+      (Doc.DBrk s)
+      (if (Int.= 0 mode)
+        (do (StringBuf.append-str buf s) (Int.+ col (String.length s)))
+        (do
+          (StringBuf.append-char buf \newline)
+          (for [i 0 indent] (StringBuf.append-char buf \space))
+          indent))
+      (Doc.DCat a b)
+      (let [col1 (render-aux (Box.peek a) indent col mode buf)]
+        (render-aux (Box.peek b) indent col1 mode buf))
+      (Doc.DNest n inner)
+      (render-aux (Box.peek inner) (Int.+ indent @n) col mode buf)
+      (Doc.DGrp bias inner)
+      ; `bias` is true when the form has no internal structure to
+      ; preserve (no comments, no blank lines between items). In
+      ; that case, we prefer flat — even if the source was
+      ; multi-line — so long as the first line fits. When bias is
+      ; false (structured source), we keep the user's layout.
+      (let [want-flat @bias
+            fl (flat-width (Box.peek inner))
+            fits? (Int.<= @(Pair.a &fl) (Int.- page-width col))]
+        (if (and want-flat fits?)
+          (render-aux (Box.peek inner) indent col 0 buf)
+          (render-aux (Box.peek inner) indent col 1 buf)))
+      (Doc.DAlign inner)
+      ; Set indent for inner to the current column. Any DBrk fired
+      ; in broken mode below this point lines up to that column.
+      (render-aux (Box.peek inner) col col mode buf)))
+
+  (doc render "renders a `Doc` to a `String`, respecting `page-width`
+and the bias on each `DGrp`. Uses a `StringBuf` for output so the
+work is linear in the rendered byte count rather than quadratic.")
+  (defn render [d]
+    (let-do [buf (StringBuf.create)]
+      (ignore (render-aux &d 0 0 1 &buf))
+      (StringBuf.to-string &buf)))
+
+  (private wrap-children)
+  (hidden wrap-children)
+  (defn wrap-children [open close bias inner close-on-newline?]
+    ; A leading softln (empty inline, newline+indent broken) makes
+    ; the first item line up with the rest when the bracketed form
+    ; goes broken. In flat mode it emits nothing, so `[1 2 3]` still
+    ; looks like `[1 2 3]`.
+    (cat
+      (text open)
+      (cat
+        (group bias (nest indent-width (cat (softln) inner)))
+        (cat (if close-on-newline? (softln) (Doc.DNil)) (text close)))))
+
+  (private last-is-cmt?)
+  (hidden last-is-cmt?)
+  (defn last-is-cmt? [items]
+    (let [n (Array.length items)]
+      (if (Int.= 0 n)
+        false
+        (match-ref (Located.form (Box.peek (Array.unsafe-nth items (Int.dec n))))
+          (Form.Cmt _) true
+          _ false))))
+
+  (private blank-before?)
+  (hidden blank-before?)
+  (doc blank-before? "true iff the source had a blank line between
+items[i-1] and items[i] — i.e., the previous item's end line and
+this item's start line are more than one line apart. Synthetic
+positions (`line = 0`) never count as gaps. Used to preserve blank
+lines inside compound forms.")
+  (defn blank-before? [items i]
+    (if (Int.<= i 0)
+      false
+      (let [prev-end @(Info.line
+              (Located.end (Box.peek (Array.unsafe-nth items (Int.dec i)))))
+            this-start @(Info.line
+              (Located.info (Box.peek (Array.unsafe-nth items i))))]
+        (and (Int.> prev-end 0) (Int.> this-start (Int.inc prev-end))))))
+
+  (private contains-comment?)
+  (hidden contains-comment?)
+  (defn contains-comment? [items]
+    (let-do [n (Array.length items)
+             found false]
+      (for [i 0 n]
+        (match-ref (Located.form (Box.peek (Array.unsafe-nth items i)))
+          (Form.Cmt _) (set! found true)
+          _ ()))
+      found))
+
+  (private contains-blank-line?)
+  (hidden contains-blank-line?)
+  (doc contains-blank-line? "true iff any pair of consecutive items
+in `items` had a blank line between them in the source.")
+  (defn contains-blank-line? [items]
+    (let-do [n (Array.length items)
+             found false
+             i 1]
+      (while-do (Int.< i n)
+        (when (blank-before? items i) (set! found true))
+        (set! i (Int.inc i)))
+      found))
+
+  (private list-bias)
+  (hidden list-bias)
+  (doc list-bias "true when the form has no structure worth
+preserving as multi-line: no embedded comments, no blank lines
+between siblings. If true, the form may auto-inline when its
+flat width fits. If false (structured source), it stays broken.")
+  (defn list-bias [items]
+    (and (not (contains-comment? items)) (not (contains-blank-line? items))))
+
+  (private reader-macro-prefix)
+  (hidden reader-macro-prefix)
+  (defn reader-macro-prefix [name]
+    (cond
+      (= name "ref") (Maybe.Just @"&")
+      (= name "deref") (Maybe.Just @"~")
+      (= name "copy") (Maybe.Just @"@")
+      (= name "quote") (Maybe.Just @"'")
+      (= name "quasiquote") (Maybe.Just @"`")
+      (= name "unquote") (Maybe.Just @"%")
+      (= name "unquote-splicing") (Maybe.Just @"%@")
+      (Maybe.Nothing)))
+
+  (private reader-macro-of)
+  (hidden reader-macro-of)
+  (defn reader-macro-of [items]
+    ; A reader-macro list is exactly two items: a synthesized symbol
+    ; head (Info.synthetic, line=0) whose single segment matches one
+    ; of the macro names, plus the body. Synthetic position is what
+    ; lets us distinguish `&x` from a literal `(ref x)`.
+    (if (not (Int.= 2 (Array.length items)))
+      (Maybe.Nothing)
+      (let [head-l (Box.peek (Array.unsafe-nth items 0))]
+        (if (Int.> @(Info.line (Located.info head-l)) 0)
+          (Maybe.Nothing)
+          (match-ref (Located.form head-l)
+            (Form.Sym segs)
+              (if (Int.= 1 (Array.length segs))
+                (reader-macro-prefix (Array.unsafe-nth segs 0))
+                (Maybe.Nothing))
+            _ (Maybe.Nothing))))))
+
+  (private special-form-hlc)
+  (hidden special-form-hlc)
+  (doc special-form-hlc "for a known special-form head, returns the
+number of leading items that should stay on the head line
+(`Maybe.Just hlc`). Remaining items become body items separated by
+soft breaks. `Maybe.Nothing` means treat the list as a default
+function call.")
+  (defn special-form-hlc [name]
+    (cond
+      (= name "defn") (Maybe.Just 3)
+      (= name "defn-") (Maybe.Just 3)
+      (= name "defndynamic") (Maybe.Just 3)
+      (= name "defn-do") (Maybe.Just 3)
+      (= name "fn") (Maybe.Just 2)
+      (= name "def") (Maybe.Just 2)
+      (= name "defdynamic") (Maybe.Just 2)
+      (= name "defmodule") (Maybe.Just 2)
+      (= name "deftype") (Maybe.Just 2)
+      (= name "let") (Maybe.Just 2)
+      (= name "let-do") (Maybe.Just 2)
+      (= name "when") (Maybe.Just 2)
+      (= name "when-do") (Maybe.Just 2)
+      (= name "unless") (Maybe.Just 2)
+      (= name "unless-do") (Maybe.Just 2)
+      (= name "if") (Maybe.Just 2)
+      (= name "for") (Maybe.Just 2)
+      (= name "while") (Maybe.Just 2)
+      (= name "while-do") (Maybe.Just 2)
+      (= name "match") (Maybe.Just 2)
+      (= name "match-ref") (Maybe.Just 2)
+      (= name "do") (Maybe.Just 1)
+      (= name "cond") (Maybe.Just 1)
+      (= name "doc") (Maybe.Just 2)
+      (= name "hidden") (Maybe.Just 2)
+      (= name "private") (Maybe.Just 2)
+      (= name "implements") (Maybe.Just 2)
+      (= name "load") (Maybe.Just 2)
+      (= name "register") (Maybe.Just 2)
+      (= name "defmacro") (Maybe.Just 3)
+      (= name "deftest") (Maybe.Just 2)
+      (Maybe.Nothing)))
+
+  (private special-form-of)
+  (hidden special-form-of)
+  (defn special-form-of [items]
+    (if (Int.= 0 (Array.length items))
+      (Maybe.Nothing)
+      (match-ref (Located.form (Box.peek (Array.unsafe-nth items 0)))
+        (Form.Sym segs)
+          (if (Int.= 1 (Array.length segs))
+            (special-form-hlc (Array.unsafe-nth segs 0))
+            (Maybe.Nothing))
+        _ (Maybe.Nothing))))
+
+  (private head-name-eq?)
+  (hidden head-name-eq?)
+  (defn head-name-eq? [items name]
+    (if (Int.= 0 (Array.length items))
+      false
+      (match-ref (Located.form (Box.peek (Array.unsafe-nth items 0)))
+        (Form.Sym segs)
+          (and (Int.= 1 (Array.length segs)) (= (Array.unsafe-nth segs 0) name))
+        _ false)))
+
+  (private paired-body?)
+  (hidden paired-body?)
+  (defn paired-body? [items]
+    ; match / match-ref / cond pair their body children as
+    ; (pattern result). Keeping the pair on one line (or pattern on
+    ; the head of a wrapped result) is essential for readability.
+    (or
+      (head-name-eq? items "match")
+      (or (head-name-eq? items "match-ref") (head-name-eq? items "cond"))))
+
+  (private binding-form?)
+  (hidden binding-form?)
+  (doc binding-form? "true iff `items` is a list headed by a
+binding-introducing operator (`let`, `let-do`, `when-do`,
+`unless-do`). Their second argument is a bindings array whose
+elements pair as `[k1 v1 k2 v2 …]`; we render those pair-aware
+instead of as a flat array.")
+  (defn binding-form? [items]
+    (or
+      (head-name-eq? items "let")
+      (or
+        (head-name-eq? items "let-do")
+        (or (head-name-eq? items "when-do") (head-name-eq? items "unless-do")))))
+
+  (doc form->doc "translates a parsed `Form` into a `Doc`. Dispatches
+on the form variant; for `Lst` it consults the special-form table,
+detects reader macros, and emits a head/body layout sized to the
+page width.")
+  (defn form->doc [f]
+    (match-ref f
+      (Form.Lst items)
+        (match (reader-macro-of items)
+          (Maybe.Just prefix)
+          (cat (text prefix) (form-at items 1))
+          (Maybe.Nothing)
+          ; Layout decisions:
+          ; - Reader-macro list: handled above.
+          ; - paired-body (match/cond): pairs on body lines, fixed +2 indent.
+          ; - HLC=1 special (do) or default function call: align-to-first-arg.
+          ; - HLC>=2 special (defn, let, defmodule, …): head + indented body at +2.
+          (let-do [
+              n
+              (Array.length items)
+              ; Default for an unrecognized list (function
+              ; call): HLC=1. When the call is too wide to fit
+              ; inline, the operator stays alone on the head
+              ; line and every arg wraps onto its own line at
+              ; +2. Uniform, predictable indentation; matches
+              ; Clojure-style convention.
+              hlc
+              (Int.min 1 n)
+              paired
+              false
+              head-parts
+              (the (Array Doc) [])
+              body-parts
+              (the (Array Doc) [])]
+            (match (special-form-of items)
+              (Maybe.Just k)
+                (do
+                  (set! hlc (Int.min k n))
+                  (set!
+                    paired
+                    (and (paired-body? items) (not (contains-comment? items)))))
+              _ ())
+            (let-do [binding? (binding-form? items)]
+              (for [i 0 hlc]
+                ; Compute the doc for items[i], then push it into
+                ; head-parts. For i>0 the separator is a soft
+                ; break wrapped in its own inner group, so each
+                ; head separator is independently breakable: when
+                ; head + arg overflows the page width, this group
+                ; goes broken (newline) while the operator stays
+                ; alone on its line. The Wadler "nested group"
+                ; pattern for adaptive HLC.
+                (let-do [item-doc (if (and binding? (Int.= i 1))
+                           ; bindings array, pair-aware
+                           (match-ref (Located.form
+                               (Box.peek (Array.unsafe-nth items 1)))
+                             (Form.Arr bindings)
+                               (if (contains-comment? bindings)
+                                 (form-at items 1)
+                                 (let-do [bn (Array.length bindings)
+                                          bparts (the (Array Doc) [])
+                                          bi 0]
+                                   (while-do (Int.< bi bn)
+                                     (when (Int.> bi 0)
+                                       (set!
+                                         bparts
+                                         (Array.push-back bparts (space))))
+                                     (set!
+                                       bparts
+                                       (Array.push-back
+                                         bparts
+                                         (form-at bindings bi)))
+                                     (when-do (Int.< (Int.inc bi) bn)
+                                       (set!
+                                         bparts
+                                         (Array.push-back bparts (text @" ")))
+                                       (set!
+                                         bparts
+                                         (Array.push-back
+                                           bparts
+                                           (form-at bindings (Int.inc bi)))))
+                                     (set! bi (Int.+ bi 2)))
+                                   ; A bindings array with two or more
+                                   ; pairs is always rendered broken,
+                                   ; one pair per line, so the
+                                   ; key/value association stays
+                                   ; visually obvious. A single-pair
+                                   ; `[a 1]` may still inline.
+                                   (cat
+                                     (text @"[")
+                                     (cat
+                                       (group
+                                         (and (list-bias bindings) (Int.<= bn 2))
+                                         (align (concat-docs bparts)))
+                                       (text @"]")))))
+                             _ (form-at items 1))
+                           (form-at items i))]
+                  (set!
+                    head-parts
+                    (Array.push-back
+                      head-parts
+                      (if (Int.= i 0) item-doc (cat (text @" ") item-doc)))))))
+            (if paired
+              ; Each pair (pattern, result) is its own group. When
+              ; the pair fits inline, render flat ("pattern result"
+              ; on one line). When it doesn't, fall back to pattern
+              ; on its own line with result indented at +2. This is
+              ; how match arms read in carp-core (paired-short) and
+              ; in longer code (pattern-line / result-indented).
+              (let-do [i hlc]
+                (while-do (Int.< i n)
+                  (when (Int.> i hlc)
+                    (do
+                      (when (blank-before? items i)
+                        (set! body-parts (Array.push-back body-parts (text @"
+"))))
+                      (set! body-parts (Array.push-back body-parts (space)))))
+                  (let [pattern-doc (form-at items i)]
+                    (if (Int.< (Int.inc i) n)
+                      (let [result-doc (form-at items (Int.inc i))]
+                        (set!
+                          body-parts
+                          (Array.push-back
+                            body-parts
+                            (group
+                              true
+                              (cat
+                                pattern-doc
+                                (nest indent-width (cat (space) result-doc)))))))
+                      (set! body-parts (Array.push-back body-parts pattern-doc))))
+                  (set! i (Int.+ i 2))))
+              (for [i hlc n]
+                (do
+                  (when (Int.> i hlc)
+                    (do
+                      (when (blank-before? items i)
+                        (set! body-parts (Array.push-back body-parts (text @"
+"))))
+                      (set! body-parts (Array.push-back body-parts (space)))))
+                  (set!
+                    body-parts
+                    (Array.push-back body-parts (form-at items i))))))
+            (let [head-doc (concat-docs head-parts)
+                  body-doc (concat-docs body-parts)
+                  has-body? (Int.< hlc n)
+                  bias (list-bias items)
+                  inner (if has-body?
+                    (nest indent-width (cat head-doc (cat (space) body-doc)))
+                    head-doc)
+                  close-doc (if (last-is-cmt? items) (softln) (Doc.DNil))]
+              (cat
+                (text @"(")
+                (cat (group bias inner) (cat close-doc (text @")")))))))
+      (Form.Arr items) (bracketed-form items @"[" @"]")
+      (Form.StaticArr items) (bracketed-form items @"$[" @"]")
+      (Form.Dict items) (bracketed-form items @"{" @"}")
+      (Form.Cmt s) (text (fmt ";%s" s))
+      _ (text (Form.str f))))
+
+  (doc format-source "parses `src` via `Reader.parse` and returns
+the formatted text, or a `ParseErr` if parsing fails. Top-level
+forms are separated by a single newline; trailing newline is added.")
+  (defn format-source [src]
+    (match (Reader.parse src)
+      (Result.Error e) (Result.Error e)
+      (Result.Success forms)
+        (let-do [n (Array.length &forms)
+                 buf (StringBuf.with-capacity (String.length src))]
+          (for [i 0 n]
+            (let-do [loc (Box.peek (Array.unsafe-nth &forms i))
+                     d (form->doc (Located.form loc))]
+              (when (Int.> i 0)
+                (let-do [prev (Box.peek (Array.unsafe-nth &forms (Int.dec i)))
+                         prev-end @(Info.line (Located.end prev))
+                         this-start @(Info.line (Located.info loc))]
+                  (StringBuf.append-char &buf \newline)
+                  ; preserve a single blank line if the original
+                  ; source had any gap between forms.
+                  (when (Int.> this-start (Int.inc prev-end))
+                    (StringBuf.append-char &buf \newline))))
+              (ignore (render-aux &d 0 0 1 &buf))))
+          (StringBuf.append-char &buf \newline)
+          (Result.Success (StringBuf.to-string &buf))))))
