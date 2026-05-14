@@ -193,6 +193,13 @@ b\"") "literal newline inside string stays literal")
 " &(fmt!
       "(deftype URI [scheme (Maybe String) host (Maybe String) port (Maybe Int)])") "deftype fields render pair-aware")
 
+  ; register-type: same pair-aware treatment as deftype for the field
+  ; array.
+  (assert-equal t "(register-type TM [tm_sec Int
+                   tm_min Int
+                   tm_hour Int])
+" &(fmt! "(register-type TM [tm_sec Int tm_min Int tm_hour Int])") "register-type fields render pair-aware")
+
   ; assert-equal keeps its state arg (`test`) on the head line so
   ; the test idiom reads naturally even when wrapped.
   (assert-equal t "(assert-equal test

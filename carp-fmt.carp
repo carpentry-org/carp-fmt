@@ -378,6 +378,7 @@ function call.")
       (= name "implements") (Maybe.Just 2)
       (= name "load") (Maybe.Just 2)
       (= name "register") (Maybe.Just 2)
+      (= name "register-type") (Maybe.Just 2)
       (= name "defmacro") (Maybe.Just 3)
       (= name "deftest") (Maybe.Just 2)
       (= name "assert-equal") (Maybe.Just 2)
@@ -526,7 +527,9 @@ page width.")
                                 (nest indent-width (cat (space) result-doc)))))))
                       (set! body-parts (Array.push-back body-parts pattern-doc))))
                   (set! i (Int.+ i 2))))
-              (let-do [deftype? (head-name-eq? items "deftype")]
+              (let-do [paired-fields? (or
+                         (head-name-eq? items "deftype")
+                         (head-name-eq? items "register-type"))]
                 (for [i hlc n]
                   (do
                     (when-do (Int.> i hlc)
@@ -534,8 +537,8 @@ page width.")
                         (set! body-parts (Array.push-back body-parts (text @"
 "))))
                       (set! body-parts (Array.push-back body-parts (space))))
-                    (let-do [item-doc (if deftype?
-                               ; plain deftype's field array is pair-aware
+                    (let-do [item-doc (if paired-fields?
+                               ; plain deftype/register-type's field array is pair-aware
                                (match-ref (Located.form
                                    (Box.peek (Array.unsafe-nth items i)))
                                  (Form.Arr fields)
