@@ -1,4 +1,4 @@
-(load "git@github.com:carpentry-org/carp-reader@0.3.1")
+(load "git@github.com:carpentry-org/carp-reader@0.3.2")
 (load "git@github.com:carpentry-org/strbuf@0.1.0")
 
 (doc Doc "is the pretty-printer document type. Wadler-style: a tree
