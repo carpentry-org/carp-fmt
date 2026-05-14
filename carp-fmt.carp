@@ -490,12 +490,11 @@ page width.")
               ; in longer code (pattern-line / result-indented).
               (let-do [i hlc]
                 (while-do (Int.< i n)
-                  (when (Int.> i hlc)
-                    (do
-                      (when (blank-before? items i)
-                        (set! body-parts (Array.push-back body-parts (text @"
+                  (when-do (Int.> i hlc)
+                    (when (blank-before? items i)
+                      (set! body-parts (Array.push-back body-parts (text @"
 "))))
-                      (set! body-parts (Array.push-back body-parts (space)))))
+                    (set! body-parts (Array.push-back body-parts (space))))
                   (let [pattern-doc (form-at items i)]
                     (if (Int.< (Int.inc i) n)
                       (let [result-doc (form-at items (Int.inc i))]
@@ -512,12 +511,11 @@ page width.")
                   (set! i (Int.+ i 2))))
               (for [i hlc n]
                 (do
-                  (when (Int.> i hlc)
-                    (do
-                      (when (blank-before? items i)
-                        (set! body-parts (Array.push-back body-parts (text @"
+                  (when-do (Int.> i hlc)
+                    (when (blank-before? items i)
+                      (set! body-parts (Array.push-back body-parts (text @"
 "))))
-                      (set! body-parts (Array.push-back body-parts (space)))))
+                    (set! body-parts (Array.push-back body-parts (space))))
                   (set!
                     body-parts
                     (Array.push-back body-parts (form-at items i))))))
