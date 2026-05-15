@@ -246,14 +246,13 @@ work is linear in the rendered byte count rather than quadratic.")
   (private wrap-children)
   (hidden wrap-children)
   (defn wrap-children [open close bias inner close-on-newline?]
-    ; A leading softln (empty inline, newline+indent broken) makes
-    ; the first item line up with the rest when the bracketed form
-    ; goes broken. In flat mode it emits nothing, so `[1 2 3]` still
-    ; looks like `[1 2 3]`.
+    ; Wrap `inner` in `open`/`close` delimiters. When broken, the first
+    ; child sits on the same line as `open` and subsequent children
+    ; align under it (classic Lisp `[1\n 2\n 3]` rather than the
+    ; dangling-bracket `[\n  1\n  2\n  3]`). Flat: `[1 2 3]` unchanged.
     (cat (text open)
-         (cat
-           (group bias (nest indent-width (cat (softln) inner)))
-           (cat (if close-on-newline? (softln) (Doc.DNil)) (text close)))))
+         (cat (group bias (align inner))
+              (cat (if close-on-newline? (softln) (Doc.DNil)) (text close)))))
 
   (private last-is-cmt?)
   (hidden last-is-cmt?)
@@ -470,23 +469,22 @@ page width.")
           ; - paired-body (match/cond): pairs on body lines, fixed +2 indent.
           ; - HLC=1 special (do) or default function call: align-to-first-arg.
           ; - HLC>=2 special (defn, let, defmodule, …): head + indented body at +2.
-          (let-do [
-              n
-              (Array.length items)
-              ; Default for an unrecognized list (function
-              ; call): HLC=1. When the call is too wide to fit
-              ; inline, the operator stays alone on the head
-              ; line and every arg wraps onto its own line at
-              ; +2. Uniform, predictable indentation; matches
-              ; Clojure-style convention.
-              hlc
-              (Int.min 1 n)
-              paired
-              false
-              head-parts
-              (the (Array Doc) [])
-              body-parts
-              (the (Array Doc) [])]
+          (let-do [n
+                   (Array.length items)
+                   ; Default for an unrecognized list (function
+                   ; call): HLC=1. When the call is too wide to fit
+                   ; inline, the operator stays alone on the head
+                   ; line and every arg wraps onto its own line at
+                   ; +2. Uniform, predictable indentation; matches
+                   ; Clojure-style convention.
+                   hlc
+                   (Int.min 1 n)
+                   paired
+                   false
+                   head-parts
+                   (the (Array Doc) [])
+                   body-parts
+                   (the (Array Doc) [])]
             (match (special-form-of items)
               (Maybe.Just k)
                 (do
@@ -566,43 +564,42 @@ page width.")
                                  _ (form-at items i))
                                (form-at items i))]
                       (set! body-parts (Array.push-back body-parts item-doc)))))))
-            (let [
-                head-doc
-                (concat-docs head-parts)
-                body-doc
-                (concat-docs body-parts)
-                has-body?
-                (Int.< hlc n)
-                ; Sum-type `deftype` reads better one-variant-per-line; veto
-                ; the otherwise-allowed auto-inline.
-                bias
-                (and (list-bias items) (not (deftype-sum-type? items)))
-                ; Default function call (no special form, not paired, HLC=1):
-                ; choose between HANG and FLOW. zprint-style heuristic:
-                ; hang only when arg0's flat-width fits within `hang-cutoff`,
-                ; so the alignment column stays manageable. Compound
-                ; arg0s like multi-line lambdas use flow (+2 nest) instead,
-                ; which avoids `(Array.reduce &(fn ...\n          ...)\n
-                ; later-arg)` mess.
-                default-call?
-                (and (not paired)
-                     (and
-                       (Maybe.nothing? &(special-form-of items))
-                       (Int.= hlc 1)))
-                hang?
-                (and default-call?
-                     (and has-body?
-                          (Int.<=
-                            @(Pair.a &(flat-width &(form-at items 1)))
-                            hang-cutoff)))
-                inner
-                (if has-body?
-                  (if hang?
-                    (cat head-doc (cat (text @" ") (align body-doc)))
-                    (nest indent-width (cat head-doc (cat (space) body-doc))))
-                  head-doc)
-                close-doc
-                (if (last-is-cmt? items) (softln) (Doc.DNil))]
+            (let [head-doc
+                  (concat-docs head-parts)
+                  body-doc
+                  (concat-docs body-parts)
+                  has-body?
+                  (Int.< hlc n)
+                  ; Sum-type `deftype` reads better one-variant-per-line; veto
+                  ; the otherwise-allowed auto-inline.
+                  bias
+                  (and (list-bias items) (not (deftype-sum-type? items)))
+                  ; Default function call (no special form, not paired, HLC=1):
+                  ; choose between HANG and FLOW. zprint-style heuristic:
+                  ; hang only when arg0's flat-width fits within `hang-cutoff`,
+                  ; so the alignment column stays manageable. Compound
+                  ; arg0s like multi-line lambdas use flow (+2 nest) instead,
+                  ; which avoids `(Array.reduce &(fn ...\n          ...)\n
+                  ; later-arg)` mess.
+                  default-call?
+                  (and (not paired)
+                       (and
+                         (Maybe.nothing? &(special-form-of items))
+                         (Int.= hlc 1)))
+                  hang?
+                  (and default-call?
+                       (and has-body?
+                            (Int.<=
+                              @(Pair.a &(flat-width &(form-at items 1)))
+                              hang-cutoff)))
+                  inner
+                  (if has-body?
+                    (if hang?
+                      (cat head-doc (cat (text @" ") (align body-doc)))
+                      (nest indent-width (cat head-doc (cat (space) body-doc))))
+                    head-doc)
+                  close-doc
+                  (if (last-is-cmt? items) (softln) (Doc.DNil))]
               (cat (text @"(")
                    (cat (group bias inner) (cat close-doc (text @")")))))))
       (Form.Arr items) (bracketed-form items @"[" @"]")
