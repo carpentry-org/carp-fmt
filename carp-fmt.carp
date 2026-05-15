@@ -23,6 +23,12 @@ returns formatted Carp source.")
 (defmodule Fmt
   (def indent-width 2)
   (def page-width 80)
+  ; When `align` would set the alignment column past this many chars,
+  ; fall back to `indent + indent-width` instead. Without this cap,
+  ; deeply nested aligned forms push subsequent items off the page.
+  ; Tighter values give more uniform output; looser values preserve
+  ; align-under-first-arg style in more cases.
+  (def align-cutoff 20)
 
   (defn text [s] (Doc.DTxt s))
   (defn space [] (Doc.DBrk @" "))
@@ -50,16 +56,14 @@ which Carp's defn resolution doesn't allow.")
           (list 'for
                 (array 'i 0 'n)
                 (list 'do
-                      (list 'when
-                            (list 'Int.> 'i 0)
-                            (list 'set!
-                                  'inner
-                                  (list 'Array.push-back 'inner (list 'space))))
-                      (list 'set!
-                            'inner
-                            (list 'Array.push-back
-                                  'inner
-                                  (list 'form-at items 'i)))))
+                  (list 'when
+                    (list 'Int.> 'i 0)
+                    (list 'set!
+                      'inner
+                      (list 'Array.push-back 'inner (list 'space))))
+                  (list 'set!
+                    'inner
+                    (list 'Array.push-back 'inner (list 'form-at items 'i)))))
           (list 'wrap-children
                 open
                 close
@@ -85,35 +89,31 @@ as `bracketed-form`.")
           (list 'while-do
                 (list 'Int.< 'bi 'bn)
                 (list 'when
-                      (list 'Int.> 'bi 0)
-                      (list 'set!
-                            'bparts
-                            (list 'Array.push-back 'bparts (list 'space))))
+                  (list 'Int.> 'bi 0)
+                  (list 'set!
+                    'bparts
+                    (list 'Array.push-back 'bparts (list 'space))))
                 (list 'set!
-                      'bparts
-                      (list 'Array.push-back 'bparts (list 'form-at arr 'bi)))
+                  'bparts
+                  (list 'Array.push-back 'bparts (list 'form-at arr 'bi)))
                 (list 'when-do
-                      (list 'Int.< (list 'Int.inc 'bi) 'bn)
-                      (list 'set!
-                            'bparts
-                            (list 'Array.push-back
-                                  'bparts
-                                  (list 'text (list 'copy " "))))
-                      (list 'set!
-                            'bparts
-                            (list 'Array.push-back
-                                  'bparts
-                                  (list 'form-at arr (list 'Int.inc 'bi)))))
+                  (list 'Int.< (list 'Int.inc 'bi) 'bn)
+                  (list 'set!
+                    'bparts
+                    (list 'Array.push-back 'bparts (list 'text (list 'copy " "))))
+                  (list 'set!
+                    'bparts
+                    (list 'Array.push-back
+                      'bparts
+                      (list 'form-at arr (list 'Int.inc 'bi)))))
                 (list 'set! 'bi (list 'Int.+ 'bi 2)))
           (list 'cat
                 (list 'text open)
                 (list 'cat
-                      (list 'group
-                            (list 'and
-                                  (list 'list-bias arr)
-                                  (list 'Int.<= 'bn 2))
-                            (list 'align (list 'concat-docs 'bparts)))
-                      (list 'text close)))))
+                  (list 'group
+                    (list 'and (list 'list-bias arr) (list 'Int.<= 'bn 2))
+                    (list 'align (list 'concat-docs 'bparts)))
+                  (list 'text close)))))
 
   (doc align "renders `d` with its indent set to the current column.
 Used by pair-aware binding arrays so the second key/value pair lines
@@ -221,9 +221,16 @@ subsequent lines wrap naturally. Returns a `(Pair Int Bool)` of
           (render-aux (Box.peek inner) indent col 0 buf)
           (render-aux (Box.peek inner) indent col 1 buf)))
       (Doc.DAlign inner)
-      ; Set indent for inner to the current column. Any DBrk fired
-      ; in broken mode below this point lines up to that column.
-      (render-aux (Box.peek inner) col col mode buf)))
+      ; Set indent for inner to the current column. Any DBrk fired in
+      ; broken mode below this point lines up to that column. If `col`
+      ; is already past `align-cutoff` (deep into a nested form), the
+      ; alignment column would leave too little room for the aligned
+      ; content; fall back to `indent + indent-width` (one level deeper
+      ; than the surrounding form), which is what plain `nest` would do.
+      (let-do [new-indent (if (Int.> col align-cutoff)
+                 (Int.+ indent indent-width)
+                 col)]
+        (render-aux (Box.peek inner) new-indent col mode buf))))
 
   (doc render "renders a `Doc` to a `String`, respecting `page-width`
 and the bias on each `DGrp`. Uses a `StringBuf` for output so the
@@ -265,9 +272,9 @@ lines inside compound forms.")
     (if (Int.<= i 0)
       false
       (let [prev-end @(Info.line (Located.end (Box.peek (Array.unsafe-nth items
-                                                                          (Int.dec i)))))
+                    (Int.dec i)))))
             this-start @(Info.line (Located.info (Box.peek (Array.unsafe-nth items
-                                                                             i))))]
+                    i))))]
         (and (Int.> prev-end 0) (Int.> this-start (Int.inc prev-end))))))
 
   (private contains-comment?)
@@ -481,8 +488,7 @@ page width.")
                 (do
                   (set! hlc (Int.min k n))
                   (set! paired
-                        (and (paired-body? items)
-                             (not (contains-comment? items)))))
+                    (and (paired-body? items) (not (contains-comment? items)))))
               _ ())
             (let-do [binding? (binding-form? items)]
               (for [i 0 hlc]
@@ -495,20 +501,18 @@ page width.")
                 ; alone on its line. The Wadler "nested group"
                 ; pattern for adaptive HLC.
                 (let-do [item-doc (if (and binding? (Int.= i 1))
-                           ; bindings array, pair-aware
-                           (match-ref (Located.form (Box.peek (Array.unsafe-nth items
-                                                                                1)))
-                             (Form.Arr bindings)
-                               (if (contains-comment? bindings)
-                                 (form-at items 1)
-                                 (pair-aware-arr-doc bindings @"[" @"]"))
-                             _ (form-at items 1))
-                           (form-at items i))]
+                      ; bindings array, pair-aware
+                      (match-ref (Located.form (Box.peek (Array.unsafe-nth items
+                              1)))
+                        (Form.Arr bindings)
+                          (if (contains-comment? bindings)
+                            (form-at items 1)
+                            (pair-aware-arr-doc bindings @"[" @"]"))
+                        _ (form-at items 1))
+                      (form-at items i))]
                   (set! head-parts
-                        (Array.push-back head-parts
-                                         (if (Int.= i 0)
-                                           item-doc
-                                           (cat (text @" ") item-doc)))))))
+                    (Array.push-back head-parts
+                      (if (Int.= i 0) item-doc (cat (text @" ") item-doc)))))))
             (if paired
               ; Each pair (pattern, result) is its own group. When
               ; the pair fits inline, render flat ("pattern result"
@@ -527,16 +531,14 @@ page width.")
                     (if (Int.< (Int.inc i) n)
                       (let [result-doc (form-at items (Int.inc i))]
                         (set! body-parts
-                              (Array.push-back body-parts
-                                               (group true
-                                                      (cat pattern-doc
-                                                           (nest indent-width
-                                                                 (cat (space)
-                                                                      result-doc)))))))
+                          (Array.push-back body-parts
+                            (group true
+                              (cat pattern-doc
+                                (nest indent-width (cat (space) result-doc)))))))
                       (set! body-parts (Array.push-back body-parts pattern-doc))))
                   (set! i (Int.+ i 2))))
               (let-do [paired-fields? (or (head-name-eq? items "deftype")
-                                          (head-name-eq? items "register-type"))]
+                    (head-name-eq? items "register-type"))]
                 (for [i hlc n]
                   (do
                     (when-do (Int.> i hlc)
@@ -545,15 +547,15 @@ page width.")
 "))))
                       (set! body-parts (Array.push-back body-parts (space))))
                     (let-do [item-doc (if paired-fields?
-                               ; plain deftype/register-type's field array is pair-aware
-                               (match-ref (Located.form (Box.peek (Array.unsafe-nth items
-                                                                                    i)))
-                                 (Form.Arr fields)
-                                   (if (contains-comment? fields)
-                                     (form-at items i)
-                                     (pair-aware-arr-doc fields @"[" @"]"))
-                                 _ (form-at items i))
-                               (form-at items i))]
+                          ; plain deftype/register-type's field array is pair-aware
+                          (match-ref (Located.form (Box.peek (Array.unsafe-nth items
+                                  i)))
+                            (Form.Arr fields)
+                              (if (contains-comment? fields)
+                                (form-at items i)
+                                (pair-aware-arr-doc fields @"[" @"]"))
+                            _ (form-at items i))
+                          (form-at items i))]
                       (set! body-parts (Array.push-back body-parts item-doc)))))))
             (let [
                 head-doc
@@ -572,8 +574,7 @@ page width.")
                 ; `+2` body indent.
                 default-call?
                 (and (not paired)
-                     (and (Maybe.nothing? &(special-form-of items))
-                          (Int.= hlc 1)))
+                  (and (Maybe.nothing? &(special-form-of items)) (Int.= hlc 1)))
                 inner
                 (if has-body?
                   (if default-call?
@@ -604,11 +605,11 @@ forms are separated by a single newline; trailing newline is added.")
                  buf (StringBuf.with-capacity (String.length src))]
           (for [i 0 n]
             (let-do [loc (Box.peek (Array.unsafe-nth &forms i))
-                     d (form->doc (Located.form loc))]
+                d (form->doc (Located.form loc))]
               (when (Int.> i 0)
                 (let-do [prev (Box.peek (Array.unsafe-nth &forms (Int.dec i)))
-                         prev-end @(Info.line (Located.end prev))
-                         this-start @(Info.line (Located.info loc))]
+                    prev-end @(Info.line (Located.end prev))
+                    this-start @(Info.line (Located.info loc))]
                   (StringBuf.append-char &buf \newline)
                   ; preserve a single blank line if the original
                   ; source had any gap between forms.

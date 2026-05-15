@@ -35,7 +35,7 @@
   ; render broken regardless of source bias.
   (assert-true t
     (String.contains-string? &(fmt! "(foo aaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccc dddddddddddddddddddddd)")
-                             "
+      "
 ")
     "wide list breaks when it exceeds page-width")
 
@@ -99,7 +99,7 @@
   ; A defn too wide for one line stays broken at +2.
   (assert-true t
     (String.contains-string? &(fmt! "(defn really-long-fn-name [argument-one argument-two argument-three] (Int.+ argument-one argument-two argument-three))")
-                             "
+      "
   ")
     "wide defn body wraps at +2")
 
@@ -109,7 +109,7 @@
 
   (assert-true t (let [once (fmt! "(defn foo [x]
   (+ x 1))")
-                       twice (fmt! &once)] (= &once &twice)) "idempotent on multi-line defn")
+        twice (fmt! &once)] (= &once &twice)) "idempotent on multi-line defn")
   (assert-true t
     (let [once (fmt! "(do x y z)")
           twice (fmt! &once)] (= &once &twice))
@@ -128,7 +128,7 @@
   ; is indented under it.
   (assert-true t
     (String.contains-string? &(fmt! "(match scrutinee (LongPatternA a b c) (do-something a b c) (LongPatternB d e f) (do-other d e f))")
-                             "
+      "
   (LongPatternA a b c)")
     "wide match: each pair on its own line")
 
