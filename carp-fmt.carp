@@ -38,89 +38,51 @@ returns formatted Carp source.")
   (defn nest [n d] (Doc.DNest n (Box.init d)))
   (defn group [bias d] (Doc.DGrp bias (Box.init d)))
 
-  (doc form-at "expands to `(form->doc (Located.form (Box.peek
-(Array.unsafe-nth items i))))`. Used inside `form->doc` to keep the
-recursive-descent call sites compact. A macro rather than a
-function because Carp doesn't resolve forward references between
-defns within a module.")
-  (defmacro form-at [items i]
-    (list 'form->doc
-          (list 'Located.form (list 'Box.peek (list 'Array.unsafe-nth items i)))))
+  (doc form-of "expands to `(Located.form (Box.peek (Array.unsafe-nth
+items i)))` — the `Form` payload of the `Located` child at index `i`.
+A macro rather than a function so calls don't have to materialize a
+`Ref Located` or copy.")
+  (defmacro form-of [items i]
+    `(Located.form (Box.peek (Array.unsafe-nth %items %i))))
 
-  (doc bracketed-form "expands to the inline iteration that renders
-an `Arr` / `StaticArr` / `Dict` body. Same macro-as-helper trick as
-`form-at`: a function would need to mutually recurse with `form->doc`,
-which Carp's defn resolution doesn't allow.")
-  (defmacro bracketed-form [items open close]
-    (list 'let-do
-          (array 'n (list 'Array.length items) 'inner '(the (Array Doc) []))
-          (list 'for
-                (array 'i 0 'n)
-                (list 'do
-                      (list 'when
-                            (list 'Int.> 'i 0)
-                            (list 'set!
-                                  'inner
-                                  (list 'Array.push-back 'inner (list 'space))))
-                      (list 'set!
-                            'inner
-                            (list 'Array.push-back
-                                  'inner
-                                  (list 'form-at items 'i)))))
-          (list 'wrap-children
-                open
-                close
-                (list 'list-bias items)
-                (list 'concat-docs 'inner)
-                (list 'last-is-cmt? items))))
+  (doc form-at "expands to `(form->doc (form-of items i))`. Used inside
+`form->doc` to keep the recursive-descent call sites compact. A macro
+rather than a function because Carp doesn't resolve forward references
+between defns within a module.")
+  (defmacro form-at [items i] `(form->doc (form-of %items %i)))
 
-  (doc pair-aware-arr-doc "expands to the pair-aware rendering for an
-array whose elements pair as `[k1 v1 k2 v2 …]`: each pair is kept on
-one line, pairs are separated by soft breaks, and the second pair
-aligns under the first when the array goes broken. Used for `let`
-bindings, plain-`deftype` field arrays, and `Dict` literals. `open`
-and `close` parameterize the delimiters. Same macro-as-helper trick
-as `bracketed-form`.")
-  (defmacro pair-aware-arr-doc [arr open close]
-    (list 'let-do
-          (array 'bn
-                 (list 'Array.length arr)
-                 'bparts
-                 '(the (Array Doc) [])
-                 'bi
-                 0)
-          (list 'while-do
-                (list 'Int.< 'bi 'bn)
-                (list 'when
-                      (list 'Int.> 'bi 0)
-                      (list 'set!
-                            'bparts
-                            (list 'Array.push-back 'bparts (list 'space))))
-                (list 'set!
-                      'bparts
-                      (list 'Array.push-back 'bparts (list 'form-at arr 'bi)))
-                (list 'when-do
-                      (list 'Int.< (list 'Int.inc 'bi) 'bn)
-                      (list 'set!
-                            'bparts
-                            (list 'Array.push-back
-                                  'bparts
-                                  (list 'text (list 'copy " "))))
-                      (list 'set!
-                            'bparts
-                            (list 'Array.push-back
-                                  'bparts
-                                  (list 'form-at arr (list 'Int.inc 'bi)))))
-                (list 'set! 'bi (list 'Int.+ 'bi 2)))
-          (list 'cat
-                (list 'text open)
-                (list 'cat
-                      (list 'group
-                            (list 'and
-                                  (list 'list-bias arr)
-                                  (list 'Int.<= 'bn 2))
-                            (list 'align (list 'concat-docs 'bparts)))
-                      (list 'text close)))))
+  (doc bracketed-doc "expands to the rendering for a delimited group of
+`Located` children: `Form.Arr` / `Form.StaticArr` / `Form.Dict` /
+plain-`deftype` field arrays / `let`-style bindings.
+
+When `step` is `1`, each child is an independent item (regular arrays).
+When `step` is `2`, children pair as `[k1 v1 k2 v2 …]`: keys and values
+stay on the same line, pairs are separated by soft breaks. A `Form.Cmt`
+always advances by one (it stands alone on its line), even at step 2.
+
+Macro rather than function for the same reason as `form-at`: the body
+calls `form->doc` recursively via `form-at`, which Carp's defn
+resolution doesn't permit forward-referenced.")
+  (defmacro bracketed-doc [arr open close step]
+    `(let-do [bn (Array.length %arr)
+              bparts (the (Array Doc) [])
+              bi 0]
+      (while-do (Int.< bi bn)
+        (when (Int.> bi 0) (set! bparts (Array.push-back bparts (space))))
+        (set! bparts (Array.push-back bparts (form-at %arr bi)))
+        (if (and (Int.= %step 2)
+                 (and (Int.< (Int.inc bi) bn) (not (is-cmt-at? %arr bi))))
+          (do
+            (set! bparts (Array.push-back bparts (text @" ")))
+            (set! bparts (Array.push-back bparts (form-at %arr (Int.inc bi))))
+            (set! bi (Int.+ bi 2)))
+          (set! bi (Int.inc bi))))
+      (cat (text %open)
+           (cat
+             (group
+               (and (auto-inline? %arr) (or (Int.= %step 1) (Int.<= bn 2)))
+               (align (concat-docs bparts)))
+             (cat (if (last-is-cmt? %arr) (softln) (Doc.DNil)) (text %close))))))
 
   (doc align "renders `d` with its indent set to the current column.
 Used by pair-aware binding arrays so the second key/value pair lines
@@ -243,26 +205,20 @@ work is linear in the rendered byte count rather than quadratic.")
       (ignore (render-aux &d 0 0 1 &buf))
       (StringBuf.to-string &buf)))
 
-  (private wrap-children)
-  (hidden wrap-children)
-  (defn wrap-children [open close bias inner close-on-newline?]
-    ; Wrap `inner` in `open`/`close` delimiters. When broken, the first
-    ; child sits on the same line as `open` and subsequent children
-    ; align under it (classic Lisp `[1\n 2\n 3]` rather than the
-    ; dangling-bracket `[\n  1\n  2\n  3]`). Flat: `[1 2 3]` unchanged.
-    (cat (text open)
-         (cat (group bias (align inner))
-              (cat (if close-on-newline? (softln) (Doc.DNil)) (text close)))))
-
   (private last-is-cmt?)
   (hidden last-is-cmt?)
   (defn last-is-cmt? [items]
     (let [n (Array.length items)]
       (if (Int.= 0 n)
         false
-        (match-ref (Located.form (Box.peek (Array.unsafe-nth items (Int.dec n))))
-          (Form.Cmt _) true
-          _ false))))
+        (match-ref (form-of items (Int.dec n)) (Form.Cmt _) true _ false))))
+
+  (private is-cmt-at?)
+  (hidden is-cmt-at?)
+  (doc is-cmt-at? "true iff `arr[i]` is a `Form.Cmt`. Used by
+`bracketed-doc` (step 2) to advance by one element so the comment
+stands alone instead of pairing with whatever follows.")
+  (defn is-cmt-at? [arr i] (match-ref (form-of arr i) (Form.Cmt _) true _ false))
 
   (private blank-before?)
   (hidden blank-before?)
@@ -286,9 +242,7 @@ lines inside compound forms.")
     (let-do [n (Array.length items)
              found false]
       (for [i 0 n]
-        (match-ref (Located.form (Box.peek (Array.unsafe-nth items i)))
-          (Form.Cmt _) (set! found true)
-          _ ()))
+        (match-ref (form-of items i) (Form.Cmt _) (set! found true) _ ()))
       found))
 
   (private contains-blank-line?)
@@ -303,15 +257,6 @@ in `items` had a blank line between them in the source.")
         (when (blank-before? items i) (set! found true))
         (set! i (Int.inc i)))
       found))
-
-  (private list-bias)
-  (hidden list-bias)
-  (doc list-bias "true when the form has no structure worth
-preserving as multi-line: no embedded comments, no blank lines
-between siblings. If true, the form may auto-inline when its
-flat width fits. If false (structured source), it stays broken.")
-  (defn list-bias [items]
-    (and (not (contains-comment? items)) (not (contains-blank-line? items))))
 
   (private reader-macro-prefix)
   (hidden reader-macro-prefix)
@@ -397,7 +342,7 @@ function call.")
   (defn special-form-of [items]
     (if (Int.= 0 (Array.length items))
       (Maybe.Nothing)
-      (match-ref (Located.form (Box.peek (Array.unsafe-nth items 0)))
+      (match-ref (form-of items 0)
         (Form.Sym segs)
           (if (Int.= 1 (Array.length segs))
             (special-form-hlc (Array.unsafe-nth segs 0))
@@ -409,7 +354,7 @@ function call.")
   (defn head-name-eq? [items name]
     (if (Int.= 0 (Array.length items))
       false
-      (match-ref (Located.form (Box.peek (Array.unsafe-nth items 0)))
+      (match-ref (form-of items 0)
         (Form.Sym segs)
           (and (Int.= 1 (Array.length segs)) (= (Array.unsafe-nth segs 0) name))
         _ false)))
@@ -448,10 +393,32 @@ they would fit on a single line.")
       (let-do [n (Array.length items)
                lst-count 0]
         (for [i 2 n]
-          (match-ref (Located.form (Box.peek (Array.unsafe-nth items i)))
+          (match-ref (form-of items i)
             (Form.Lst _) (set! lst-count (Int.inc lst-count))
             _ ()))
         (Int.>= lst-count 2))))
+
+  (private defmodule-multi-body?)
+  (hidden defmodule-multi-body?)
+  (doc defmodule-multi-body? "true iff `items` is a `(defmodule Name …)`
+with two or more body forms. Modules are structural — collapsing
+multiple definitions onto one line defeats the visual grouping;
+suppress auto-inlining in that case.")
+  (defn defmodule-multi-body? [items]
+    (and (head-name-eq? items "defmodule") (Int.> (Array.length items) 3)))
+
+  (private auto-inline?)
+  (hidden auto-inline?)
+  (doc auto-inline? "true iff a list/array of `items` may collapse onto
+a single line when it fits. False when the source has visible structure
+worth preserving — comments, blank lines between siblings — or when
+the form is one we treat as inherently multi-line: sum-type `deftype`
+and `defmodule` with multiple body forms.")
+  (defn auto-inline? [items]
+    (and (not (contains-comment? items))
+         (and (not (contains-blank-line? items))
+              (and (not (deftype-sum-type? items))
+                   (not (defmodule-multi-body? items))))))
 
   (doc form->doc "translates a parsed `Form` into a `Doc`. Dispatches
 on the form variant; for `Lst` it consults the special-form table,
@@ -469,22 +436,17 @@ page width.")
           ; - paired-body (match/cond): pairs on body lines, fixed +2 indent.
           ; - HLC=1 special (do) or default function call: align-to-first-arg.
           ; - HLC>=2 special (defn, let, defmodule, …): head + indented body at +2.
-          (let-do [n
-                   (Array.length items)
+          (let-do [n (Array.length items)
                    ; Default for an unrecognized list (function
                    ; call): HLC=1. When the call is too wide to fit
                    ; inline, the operator stays alone on the head
                    ; line and every arg wraps onto its own line at
                    ; +2. Uniform, predictable indentation; matches
                    ; Clojure-style convention.
-                   hlc
-                   (Int.min 1 n)
-                   paired
-                   false
-                   head-parts
-                   (the (Array Doc) [])
-                   body-parts
-                   (the (Array Doc) [])]
+                   hlc (Int.min 1 n)
+                   paired false
+                   head-parts (the (Array Doc) [])
+                   body-parts (the (Array Doc) [])]
             (match (special-form-of items)
               (Maybe.Just k)
                 (do
@@ -504,13 +466,11 @@ page width.")
                 ; alone on its line. The Wadler "nested group"
                 ; pattern for adaptive HLC.
                 (let-do [item-doc (if (and binding? (Int.= i 1))
-                           ; bindings array, pair-aware
-                           (match-ref (Located.form (Box.peek (Array.unsafe-nth items
-                                                                                1)))
+                           ; bindings array, pair-aware (handles comments
+                           ; by emitting them on their own line between pairs)
+                           (match-ref (form-of items 1)
                              (Form.Arr bindings)
-                               (if (contains-comment? bindings)
-                                 (form-at items 1)
-                                 (pair-aware-arr-doc bindings @"[" @"]"))
+                               (bracketed-doc bindings @"[" @"]" 2)
                              _ (form-at items 1))
                            (form-at items i))]
                   (set! head-parts
@@ -555,25 +515,16 @@ page width.")
                       (set! body-parts (Array.push-back body-parts (space))))
                     (let-do [item-doc (if paired-fields?
                                ; plain deftype/register-type's field array is pair-aware
-                               (match-ref (Located.form (Box.peek (Array.unsafe-nth items
-                                                                                    i)))
+                               (match-ref (form-of items i)
                                  (Form.Arr fields)
-                                   (if (contains-comment? fields)
-                                     (form-at items i)
-                                     (pair-aware-arr-doc fields @"[" @"]"))
+                                   (bracketed-doc fields @"[" @"]" 2)
                                  _ (form-at items i))
                                (form-at items i))]
                       (set! body-parts (Array.push-back body-parts item-doc)))))))
-            (let [head-doc
-                  (concat-docs head-parts)
-                  body-doc
-                  (concat-docs body-parts)
-                  has-body?
-                  (Int.< hlc n)
-                  ; Sum-type `deftype` reads better one-variant-per-line; veto
-                  ; the otherwise-allowed auto-inline.
-                  bias
-                  (and (list-bias items) (not (deftype-sum-type? items)))
+            (let [head-doc (concat-docs head-parts)
+                  body-doc (concat-docs body-parts)
+                  has-body? (Int.< hlc n)
+                  bias (auto-inline? items)
                   ; Default function call (no special form, not paired, HLC=1):
                   ; choose between HANG and FLOW. zprint-style heuristic:
                   ; hang only when arg0's flat-width fits within `hang-cutoff`,
@@ -581,33 +532,26 @@ page width.")
                   ; arg0s like multi-line lambdas use flow (+2 nest) instead,
                   ; which avoids `(Array.reduce &(fn ...\n          ...)\n
                   ; later-arg)` mess.
-                  default-call?
-                  (and (not paired)
-                       (and
-                         (Maybe.nothing? &(special-form-of items))
-                         (Int.= hlc 1)))
-                  hang?
-                  (and default-call?
-                       (and has-body?
-                            (Int.<=
-                              @(Pair.a &(flat-width &(form-at items 1)))
-                              hang-cutoff)))
-                  inner
-                  (if has-body?
+                  default-call? (and (not paired)
+                                     (and
+                                       (Maybe.nothing? &(special-form-of items))
+                                       (Int.= hlc 1)))
+                  hang? (and default-call?
+                             (and has-body?
+                                  (Int.<=
+                                    @(Pair.a &(flat-width &(form-at items 1)))
+                                    hang-cutoff)))
+                  inner (if has-body?
                     (if hang?
                       (cat head-doc (cat (text @" ") (align body-doc)))
                       (nest indent-width (cat head-doc (cat (space) body-doc))))
                     head-doc)
-                  close-doc
-                  (if (last-is-cmt? items) (softln) (Doc.DNil))]
+                  close-doc (if (last-is-cmt? items) (softln) (Doc.DNil))]
               (cat (text @"(")
                    (cat (group bias inner) (cat close-doc (text @")")))))))
-      (Form.Arr items) (bracketed-form items @"[" @"]")
-      (Form.StaticArr items) (bracketed-form items @"$[" @"]")
-      (Form.Dict items)
-        (if (contains-comment? items)
-          (bracketed-form items @"{" @"}")
-          (pair-aware-arr-doc items @"{" @"}"))
+      (Form.Arr items) (bracketed-doc items @"[" @"]" 1)
+      (Form.StaticArr items) (bracketed-doc items @"$[" @"]" 1)
+      (Form.Dict items) (bracketed-doc items @"{" @"}" 2)
       (Form.Cmt s) (text (fmt ";%s" s))
       _ (text (Form.str f))))
 
