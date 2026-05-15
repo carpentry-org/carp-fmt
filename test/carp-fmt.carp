@@ -34,7 +34,9 @@
   ; Width-driven breaking: a list that exceeds 80 columns should
   ; render broken regardless of source bias.
   (assert-true t
-    (String.contains-string? &(fmt! "(foo aaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccc dddddddddddddddddddddd)")
+    (String.contains-string?
+      &(fmt!
+        "(foo aaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccc dddddddddddddddddddddd)")
       "
 ")
     "wide list breaks when it exceeds page-width")
@@ -98,7 +100,9 @@
   (+ x 1))") "short multi-line defn auto-inlines")
   ; A defn too wide for one line stays broken at +2.
   (assert-true t
-    (String.contains-string? &(fmt! "(defn really-long-fn-name [argument-one argument-two argument-three] (Int.+ argument-one argument-two argument-three))")
+    (String.contains-string?
+      &(fmt!
+        "(defn really-long-fn-name [argument-one argument-two argument-three] (Int.+ argument-one argument-two argument-three))")
       "
   ")
     "wide defn body wraps at +2")
@@ -109,13 +113,14 @@
 
   (assert-true t (let [once (fmt! "(defn foo [x]
   (+ x 1))")
-        twice (fmt! &once)] (= &once &twice)) "idempotent on multi-line defn")
+                       twice (fmt! &once)] (= &once &twice)) "idempotent on multi-line defn")
   (assert-true t
     (let [once (fmt! "(do x y z)")
           twice (fmt! &once)] (= &once &twice))
     "idempotent on short do")
   (assert-true t
-    (let [once (fmt! "(defmodule Math (defn square [x] (* x x)) (defn cube [x] (* (Math.square x) x)))")
+    (let [once (fmt!
+            "(defmodule Math (defn square [x] (* x x)) (defn cube [x] (* (Math.square x) x)))")
           twice (fmt! &once)]
       (= &once &twice))
     "idempotent on nested defns inside defmodule")
@@ -127,7 +132,9 @@
   ; pair itself is too wide, pattern goes on its own line and result
   ; is indented under it.
   (assert-true t
-    (String.contains-string? &(fmt! "(match scrutinee (LongPatternA a b c) (do-something a b c) (LongPatternB d e f) (do-other d e f))")
+    (String.contains-string?
+      &(fmt!
+        "(match scrutinee (LongPatternA a b c) (do-something a b c) (LongPatternB d e f) (do-other d e f))")
       "
   (LongPatternA a b c)")
     "wide match: each pair on its own line")
@@ -175,14 +182,16 @@ b\"") "literal newline inside string stays literal")
  'name (cadr l)
  'bound-to (AST.ann (caddr l))
  'static? static?}
-" &(fmt! "{'value l 'type 'def 'name (cadr l) 'bound-to (AST.ann (caddr l)) 'static? static?}") "dict literal renders pair-aware")
+" &(fmt!
+      "{'value l 'type 'def 'name (cadr l) 'bound-to (AST.ann (caddr l)) 'static? static?}") "dict literal renders pair-aware")
 
   ; deftype: plain field array is pair-aware — each (name type) pair
   ; stays on one line even when the array spans multiple lines.
   (assert-equal t "(deftype URI [scheme (Maybe String)
               host (Maybe String)
               port (Maybe Int)])
-" &(fmt! "(deftype URI [scheme (Maybe String) host (Maybe String) port (Maybe Int)])") "deftype fields render pair-aware")
+" &(fmt!
+      "(deftype URI [scheme (Maybe String) host (Maybe String) port (Maybe Int)])") "deftype fields render pair-aware")
 
   ; register-type: same pair-aware treatment as deftype for the field
   ; array.
@@ -197,7 +206,8 @@ b\"") "literal newline inside string stays literal")
   \"expected-result-string\"
   &(some-function arg1 arg2)
   \"some descriptive message\")
-" &(fmt! "(assert-equal test \"expected-result-string\" &(some-function arg1 arg2) \"some descriptive message\")") "assert-equal keeps state arg on head line")
+" &(fmt!
+      "(assert-equal test \"expected-result-string\" &(some-function arg1 arg2) \"some descriptive message\")") "assert-equal keeps state arg on head line")
 
   ; Blank lines inside compound forms are preserved too.
   (assert-equal t "(defmodule M
