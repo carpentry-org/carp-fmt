@@ -4,6 +4,8 @@ is a formatter for Carp. Right now, it is opinionated and not tunable. That’s
 mostly because I do not know what other people would like their code to look
 like. I would be grateful for input in the form of issues.
 
+The output style is documented in [the style document](docs/STYLE.md).
+
 ## Install
 
 ```bash
