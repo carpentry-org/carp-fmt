@@ -4,7 +4,8 @@
 
 (use-all Test)
 
-(defn fmt! [src] (Result.unsafe-from-success (Fmt.format-source src)))
+(defn fmt! [src]
+  (match (Fmt.format-source src) (Result.Success s) s (Result.Error _) @""))
 
 (deftest t
   (assert-equal t "42

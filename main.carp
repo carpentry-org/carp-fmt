@@ -47,7 +47,7 @@
       (match (format-or-error! path &src)
         (Maybe.Nothing) 1
         (Maybe.Just formatted)
-          (if (= &src &formatted) 0 (if (write-or-error! path formatted) 0 1)))))
+          (cond (= &src &formatted) 0 (write-or-error! path formatted) 0 1))))
 
 (private handle-check!)
 (hidden handle-check!)
