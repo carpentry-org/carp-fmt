@@ -1,13 +1,6 @@
 (load "git@github.com:carpentry-org/carp-reader@0.3.5")
 (load "git@github.com:carpentry-org/strbuf@0.1.0")
 
-(doc Doc "is the pretty-printer document type. Wadler-style: a tree
-of text, breakpoints (`DBrk`), and grouped alternatives (`DGrp`).
-`DGrp` carries a `bias` flag that's `true` when the form has no
-structure worth preserving as multi-line (no comments, no blank
-lines) and so may auto-inline if it fits. `DAlign` switches the
-indent to the current column for the inner doc — used by pair-aware
-binding-array rendering.")
 (deftype Doc
   (DNil [])
   (DTxt [String])
@@ -23,12 +16,9 @@ returns formatted Carp source.")
 (defmodule Fmt
   (def indent-width 2)
   (def page-width 80)
-  ; For default function calls (no special-form rule), choose between
-  ; HANG (`(op arg0\n     arg1)`, align under arg0) and FLOW (`(op\n
-  ; arg0\n  arg1)`, +2 indent). zprint-style heuristic: hang only when
-  ; arg0 is short enough that the alignment column won't push later
-  ; args off the page. If arg0's flat-width exceeds this cutoff, use
-  ; flow instead.
+  ; Max flat-width of arg0 for a default call to HANG (align args under arg0)
+  ; rather than FLOW (+2 indent); beyond this the alignment column would push
+  ; later args off the page.
   (def hang-cutoff 40)
 
   (defn text [s] (Doc.DTxt s))
@@ -38,31 +28,11 @@ returns formatted Carp source.")
   (defn nest [n d] (Doc.DNest n (Box.init d)))
   (defn group [bias d] (Doc.DGrp bias (Box.init d)))
 
-  (doc form-of "expands to `(Located.form (Box.peek (Array.unsafe-nth
-items i)))` — the `Form` payload of the `Located` child at index `i`.
-A macro rather than a function so calls don't have to materialize a
-`Ref Located` or copy.")
   (defmacro form-of [items i]
     `(Located.form (Box.peek (Array.unsafe-nth %items %i))))
 
-  (doc form-at "expands to `(form->doc (form-of items i))`. Used inside
-`form->doc` to keep the recursive-descent call sites compact. A macro
-rather than a function because Carp doesn't resolve forward references
-between defns within a module.")
   (defmacro form-at [items i] `(form->doc (form-of %items %i)))
 
-  (doc bracketed-doc "expands to the rendering for a delimited group of
-`Located` children: `Form.Arr` / `Form.StaticArr` / `Form.Dict` /
-plain-`deftype` field arrays / `let`-style bindings.
-
-When `step` is `1`, each child is an independent item (regular arrays).
-When `step` is `2`, children pair as `[k1 v1 k2 v2 …]`: keys and values
-stay on the same line, pairs are separated by soft breaks. A `Form.Cmt`
-always advances by one (it stands alone on its line), even at step 2.
-
-Macro rather than function for the same reason as `form-at`: the body
-calls `form->doc` recursively via `form-at`, which Carp's defn
-resolution doesn't permit forward-referenced.")
   (defmacro bracketed-doc [arr open close step]
     `(let-do [bn (Array.length %arr)
               bparts (the (Array Doc) [])
@@ -84,13 +54,8 @@ resolution doesn't permit forward-referenced.")
                (align (concat-docs bparts)))
              (cat (if (last-is-cmt? %arr) (softln) (Doc.DNil)) (text %close))))))
 
-  (doc align "renders `d` with its indent set to the current column.
-Used by pair-aware binding arrays so the second key/value pair lines
-up with the first.")
   (defn align [d] (Doc.DAlign (Box.init d)))
 
-  (doc concat-docs "concatenates an array of docs in order, with no
-separator between them. Empty array returns `DNil`.")
   (defn concat-docs [ds]
     (let-do [n (Array.length &ds)
              acc (Doc.DNil)]
@@ -99,8 +64,6 @@ separator between them. Empty array returns `DNil`.")
 
   (private text-first-line-info)
   (hidden text-first-line-info)
-  (doc text-first-line-info "scans a text fragment and returns the
-position of the first `\\n` (or `-1` if none), plus the total length.")
   (defn text-first-line-info [s]
     (let-do [n (String.length s)
              nl-pos -1
@@ -110,12 +73,6 @@ position of the first `\\n` (or `-1` if none), plus the total length.")
         (set! i (Int.inc i)))
       (Pair.init nl-pos n)))
 
-  (doc flat-width "returns the width of `d` rendered flat, measured up
-to (and not including) the first literal newline embedded in any
-`DTxt`. This matches Wadler's `fits?`: a multi-line string is
-acceptable on the current line as long as its FIRST line fits;
-subsequent lines wrap naturally. Returns a `(Pair Int Bool)` of
-`(width has-newline?)`.")
   (defn flat-width [d]
     (match-ref d
       (Doc.DNil) (Pair.init 0 false)
@@ -135,17 +92,9 @@ subsequent lines wrap naturally. Returns a `(Pair Int Bool)` of
       (Doc.DGrp _ inner) (flat-width (Box.peek inner))
       (Doc.DAlign inner) (flat-width (Box.peek inner))))
 
-  ; ----------------------------------------------------------------
-  ; Renderer: walks the doc, picking flat or broken per group.
-  ;
   ; `mode`: 0 = flat (DBrk emits its inline text)
   ;         1 = broken (DBrk emits newline + indent)
-  ; `indent`: current indent level
-  ; `col`: current column
-  ; `buf`: output StringBuf, mutated in place
-  ; Returns the new column.
-  ; ----------------------------------------------------------------
-
+  ; `buf` is mutated in place; returns the new column.
   (private render-aux)
   (hidden render-aux)
   (defn render-aux [d indent col mode buf]
@@ -190,16 +139,10 @@ subsequent lines wrap naturally. Returns a `(Pair Int Bool)` of
           (render-aux (Box.peek inner) indent col 0 buf)
           (render-aux (Box.peek inner) indent col 1 buf)))
       (Doc.DAlign inner)
-      ; Set indent for inner to the current column. Any DBrk fired in
-      ; broken mode below this point lines up to that column. cljfmt
-      ; style: trust the user's nesting and emit consistently rather
-      ; than capping; deeply nested deep-aligned output is a signal
-      ; about the source code, not something the formatter should hide.
+      ; Set indent for inner to the current column, so any DBrk fired in
+      ; broken mode below this point lines up to that column.
       (render-aux (Box.peek inner) col col mode buf)))
 
-  (doc render "renders a `Doc` to a `String`, respecting `page-width`
-and the bias on each `DGrp`. Uses a `StringBuf` for output so the
-work is linear in the rendered byte count rather than quadratic.")
   (defn render [d]
     (let-do [buf (StringBuf.create)]
       (ignore (render-aux &d 0 0 1 &buf))
@@ -215,18 +158,10 @@ work is linear in the rendered byte count rather than quadratic.")
 
   (private is-cmt-at?)
   (hidden is-cmt-at?)
-  (doc is-cmt-at? "true iff `arr[i]` is a `Form.Cmt`. Used by
-`bracketed-doc` (step 2) to advance by one element so the comment
-stands alone instead of pairing with whatever follows.")
   (defn is-cmt-at? [arr i] (match-ref (form-of arr i) (Form.Cmt _) true _ false))
 
   (private blank-before?)
   (hidden blank-before?)
-  (doc blank-before? "true iff the source had a blank line between
-items[i-1] and items[i] — i.e., the previous item's end line and
-this item's start line are more than one line apart. Synthetic
-positions (`line = 0`) never count as gaps. Used to preserve blank
-lines inside compound forms.")
   (defn blank-before? [items i]
     (if (Int.<= i 0)
       false
@@ -247,8 +182,6 @@ lines inside compound forms.")
 
   (private contains-blank-line?)
   (hidden contains-blank-line?)
-  (doc contains-blank-line? "true iff any pair of consecutive items
-in `items` had a blank line between them in the source.")
   (defn contains-blank-line? [items]
     (let-do [n (Array.length items)
              found false
@@ -292,11 +225,6 @@ in `items` had a blank line between them in the source.")
 
   (private special-form-hlc)
   (hidden special-form-hlc)
-  (doc special-form-hlc "for a known special-form head, returns the
-number of leading items that should stay on the head line
-(`Maybe.Just hlc`). Remaining items become body items separated by
-soft breaks. `Maybe.Nothing` means treat the list as a default
-function call.")
   (defn special-form-hlc [name]
     (cond
       (= name "defn") (Maybe.Just 3)
@@ -370,11 +298,6 @@ function call.")
 
   (private binding-form?)
   (hidden binding-form?)
-  (doc binding-form? "true iff `items` is a list headed by a
-binding-introducing operator (`let`, `let-do`, `when-do`,
-`unless-do`). Their second argument is a bindings array whose
-elements pair as `[k1 v1 k2 v2 …]`; we render those pair-aware
-instead of as a flat array.")
   (defn binding-form? [items]
     (or (head-name-eq? items "let")
         (or (head-name-eq? items "let-do")
@@ -383,10 +306,6 @@ instead of as a flat array.")
 
   (private deftype-sum-type?)
   (hidden deftype-sum-type?)
-  (doc deftype-sum-type? "true iff `items` is a `(deftype Name …)` with
-two or more `Lst` variant forms in the body. Sum types read better
-one-variant-per-line; we suppress auto-inlining for them even when
-they would fit on a single line.")
   (defn deftype-sum-type? [items]
     (if (not (head-name-eq? items "deftype"))
       false
@@ -400,30 +319,17 @@ they would fit on a single line.")
 
   (private defmodule-multi-body?)
   (hidden defmodule-multi-body?)
-  (doc defmodule-multi-body? "true iff `items` is a `(defmodule Name …)`
-with two or more body forms. Modules are structural — collapsing
-multiple definitions onto one line defeats the visual grouping;
-suppress auto-inlining in that case.")
   (defn defmodule-multi-body? [items]
     (and (head-name-eq? items "defmodule") (Int.> (Array.length items) 3)))
 
   (private auto-inline?)
   (hidden auto-inline?)
-  (doc auto-inline? "true iff a list/array of `items` may collapse onto
-a single line when it fits. False when the source has visible structure
-worth preserving — comments, blank lines between siblings — or when
-the form is one we treat as inherently multi-line: sum-type `deftype`
-and `defmodule` with multiple body forms.")
   (defn auto-inline? [items]
     (and (not (contains-comment? items))
          (and (not (contains-blank-line? items))
               (and (not (deftype-sum-type? items))
                    (not (defmodule-multi-body? items))))))
 
-  (doc form->doc "translates a parsed `Form` into a `Doc`. Dispatches
-on the form variant; for `Lst` it consults the special-form table,
-detects reader macros, and emits a head/body layout sized to the
-page width.")
   (defn form->doc [f]
     (match-ref f
       (Form.Lst items)
@@ -437,12 +343,9 @@ page width.")
           ; - HLC=1 special (do) or default function call: align-to-first-arg.
           ; - HLC>=2 special (defn, let, defmodule, …): head + indented body at +2.
           (let-do [n (Array.length items)
-                   ; Default for an unrecognized list (function
-                   ; call): HLC=1. When the call is too wide to fit
-                   ; inline, the operator stays alone on the head
-                   ; line and every arg wraps onto its own line at
-                   ; +2. Uniform, predictable indentation; matches
-                   ; Clojure-style convention.
+                   ; Unrecognized list (function call) defaults to HLC=1: when
+                   ; too wide to fit inline, the operator stays alone on the
+                   ; head line and every arg wraps onto its own line at +2.
                    hlc (Int.min 1 n)
                    paired false
                    head-parts (the (Array Doc) [])
@@ -457,14 +360,10 @@ page width.")
               _ ())
             (let-do [binding? (binding-form? items)]
               (for [i 0 hlc]
-                ; Compute the doc for items[i], then push it into
-                ; head-parts. For i>0 the separator is a soft
-                ; break wrapped in its own inner group, so each
-                ; head separator is independently breakable: when
-                ; head + arg overflows the page width, this group
-                ; goes broken (newline) while the operator stays
-                ; alone on its line. The Wadler "nested group"
-                ; pattern for adaptive HLC.
+                ; For i>0 the separator is a soft break wrapped in its own
+                ; inner group, so each head separator is independently
+                ; breakable: when head + arg overflows the page width, this
+                ; group breaks while the operator stays alone on its line.
                 (let-do [item-doc (if (and binding? (Int.= i 1))
                            ; bindings array, pair-aware (handles comments
                            ; by emitting them on their own line between pairs)
@@ -479,12 +378,9 @@ page width.")
                                            item-doc
                                            (cat (text @" ") item-doc)))))))
             (if paired
-              ; Each pair (pattern, result) is its own group. When
-              ; the pair fits inline, render flat ("pattern result"
-              ; on one line). When it doesn't, fall back to pattern
-              ; on its own line with result indented at +2. This is
-              ; how match arms read in carp-core (paired-short) and
-              ; in longer code (pattern-line / result-indented).
+              ; Each (pattern, result) pair is its own group: when it fits,
+              ; render flat on one line; otherwise pattern goes on its own
+              ; line with result indented at +2.
               (let-do [i hlc]
                 (while-do (Int.< i n)
                   (when-do (Int.> i hlc)
@@ -525,13 +421,9 @@ page width.")
                   body-doc (concat-docs body-parts)
                   has-body? (Int.< hlc n)
                   bias (auto-inline? items)
-                  ; Default function call (no special form, not paired, HLC=1):
-                  ; choose between HANG and FLOW. zprint-style heuristic:
-                  ; hang only when arg0's flat-width fits within `hang-cutoff`,
-                  ; so the alignment column stays manageable. Compound
-                  ; arg0s like multi-line lambdas use flow (+2 nest) instead,
-                  ; which avoids `(Array.reduce &(fn ...\n          ...)\n
-                  ; later-arg)` mess.
+                  ; Default function call: choose HANG (align under arg0) only
+                  ; when arg0's flat-width fits within `hang-cutoff`, so the
+                  ; alignment column stays manageable; otherwise FLOW (+2 nest).
                   default-call? (and (not paired)
                                      (and
                                        (Maybe.nothing? &(special-form-of items))

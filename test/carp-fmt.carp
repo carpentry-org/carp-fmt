@@ -25,7 +25,6 @@
   (assert-equal t "{:a 1}
 " &(fmt! "{:a 1}") "short dict stays inline")
 
-  ; Two top-level forms, newline separation
   (assert-equal t "1
 2
 " &(fmt! "1
@@ -47,22 +46,18 @@
 " &(fmt! "(a
   b)") "short multi-line auto-inlines")
 
-  ; Conversely: a short single-line list stays inline.
   (assert-equal t "(a b c)
 " &(fmt! "(a b c)") "single-line source stays inline")
 
-  ; Top-level comment.
   (assert-equal t "; hello
 42
 " &(fmt! "; hello
 42") "top-level comment retains newline before next form")
 
-  ; Comment inside a list forces break.
   (assert-true t (String.contains-string? &(fmt! "(a ; mid
  b)") "
 ") "list containing a comment renders broken")
 
-  ; Reader macros round-trip with their original syntax.
   (assert-equal t "&x
 " &(fmt! "&x") "ref reader macro")
   (assert-equal t "~x
@@ -80,11 +75,6 @@
   (assert-equal t "&(f x)
 " &(fmt! "&(f x)") "ref macro around compound form")
 
-  ; ----------------------------------------------------------------
-  ; Special-form layouts.
-  ; ----------------------------------------------------------------
-
-  ; Short single-line forms stay inline.
   (assert-equal t "(defn foo [x] (+ x 1))
 " &(fmt! "(defn foo [x] (+ x 1))") "short defn stays inline")
   (assert-equal t "(let [a 1] a)
@@ -94,11 +84,9 @@
   (assert-equal t "(do x y z)
 " &(fmt! "(do x y z)") "short do stays inline")
 
-  ; Short multi-line special forms auto-inline when they fit.
   (assert-equal t "(defn foo [x] (+ x 1))
 " &(fmt! "(defn foo [x]
   (+ x 1))") "short multi-line defn auto-inlines")
-  ; A defn too wide for one line stays broken at +2.
   (assert-true t
     (String.contains-string?
       &(fmt!
@@ -106,10 +94,6 @@
       "
   ")
     "wide defn body wraps at +2")
-
-  ; ----------------------------------------------------------------
-  ; Idempotency: formatting twice equals formatting once.
-  ; ----------------------------------------------------------------
 
   (assert-true t (let [once (fmt! "(defn foo [x]
   (+ x 1))")
@@ -125,7 +109,6 @@
       (= &once &twice))
     "idempotent on nested defns inside defmodule")
 
-  ; Short match auto-inlines, like everything else.
   (assert-equal t "(match x (A a) 1 (B b) 2)
 " &(fmt! "(match x (A a) 1 (B b) 2)") "short match stays inline")
   ; A wider match breaks pair-aware: each pair on its own line; if a
@@ -139,10 +122,6 @@
   (LongPatternA a b c)")
     "wide match: each pair on its own line")
 
-  ; ----------------------------------------------------------------
-  ; blank lines between top-level forms are preserved when present
-  ; in the source.
-  ; ----------------------------------------------------------------
   (assert-equal t "1
 2
 " &(fmt! "1
@@ -162,9 +141,7 @@
 
 2") "multiple blank lines collapse to one")
 
-  ; ----------------------------------------------------------------
   ; multi-line string literals stay multi-line, not `\n`-escaped.
-  ; ----------------------------------------------------------------
   (assert-equal t "\"a
 b\"
 " &(fmt! "\"a
@@ -209,7 +186,6 @@ b\"") "literal newline inside string stays literal")
 " &(fmt!
       "(assert-equal test \"expected-result-string\" &(some-function arg1 arg2) \"some descriptive message\")") "assert-equal keeps state arg on head line")
 
-  ; Blank lines inside compound forms are preserved too.
   (assert-equal t "(defmodule M
   (defn a [] 1)
 
