@@ -153,6 +153,12 @@ b\"") "literal newline inside string stays literal")
   (assert-equal t "\"$-1\\r\\n\"
 " &(fmt! "\"$-1\\r\\n\"") "CRLF in string round-trips as escape pair")
 
+  ; char literals above the BMP round-trip through the eight-digit `\U`
+  ; escape rather than an un-reparseable five/six-digit `\u` (carp-reader
+  ; ≥ 0.3.7); before the bump this source failed to parse outright.
+  (assert-equal t "\\U0001f600
+" &(fmt! "\\U0001f600") "char literal above the BMP round-trips via \\U")
+
   ; dict: key/value pairs stay together when the dict spans multiple
   ; lines, like let bindings and deftype fields.
   (assert-equal t "{'value l
