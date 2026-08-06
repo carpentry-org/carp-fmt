@@ -163,7 +163,7 @@ short bindings stay compact regardless of how the source was written:
 
 There are four exceptions. `carp-fmt` keeps the form multi-line when:
 
-- it contains an inline comment,
+- it contains an inline comment, at any depth,
 - it has a blank line between siblings,
 - it's a `deftype` with two or more `Lst` variant items (a sum type), or
 - it's a `defmodule` with two or more body forms.
@@ -172,6 +172,21 @@ The first two are about preserving structure the author put there. The
 last two are about visual grouping: a sum type's variants belong
 one-per-line, and a module that defines multiple things isn't a one-liner
 even when it would fit.
+
+## Comments
+
+A comment runs to the end of its line, so nothing may follow it there.
+A form containing one therefore stays multi-line, and so does every form
+around it, all the way out to the top level. When a comment is the last
+child of a form, the closing delimiters go on the next line:
+
+```clojure
+(defn f []
+  (do
+    (g)
+    ; done here
+  ))
+```
 
 ## Reader macros
 

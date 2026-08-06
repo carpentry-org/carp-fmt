@@ -59,6 +59,56 @@
  b)") "
 ") "list containing a comment renders broken")
 
+  (assert-equal t "(defn f []
+  (do
+    (g)
+    ; note
+  ))
+" &(fmt! "(defn f []
+  (do
+    (g)
+    ; note
+    ))") "trailing comment keeps every enclosing closer off its line")
+
+  (assert-equal t "(defn f []
+  [1
+   2
+   ; note
+  ])
+" &(fmt! "(defn f [] [1 2
+ ; note
+ ])") "trailing comment in an array keeps the closer off its line")
+
+  (assert-equal t "(defn f []
+  (g 1
+     ; note
+  ))
+" &(fmt! "(defn f [] (g 1
+ ; note
+ ))") "trailing comment in a plain call keeps the closer off its line")
+
+  ; the multi-line string settles the flat width; the comment after it
+  ; must still break the enclosing forms.
+  (assert-equal t "(defn f []
+  (do
+    (g \"a
+b\")
+    ; note
+  ))
+" &(fmt! "(defn f []
+  (do
+    (g \"a
+b\")
+    ; note
+    ))") "comment after a multi-line string still breaks its ancestors")
+
+  (assert-true t (let [once (fmt! "(defn f []
+  (do
+    (g)
+    ; note
+    ))")
+                       twice (fmt! &once)] (= &once &twice)) "output with a trailing comment reparses and is idempotent")
+
   (assert-equal t "&x
 " &(fmt! "&x") "ref reader macro")
   (assert-equal t "~x
