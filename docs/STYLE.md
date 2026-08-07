@@ -188,6 +188,16 @@ child of a form, the closing delimiters go on the next line:
   ))
 ```
 
+The same holds on a head line: a comment there ends it, and the children
+that would have followed move to the body.
+
+```clojure
+(defn ; why
+  f
+  []
+  1)
+```
+
 ## Reader macros
 
 Synthetic `(ref x)` / `(copy x)` / etc. forms produced by the reader

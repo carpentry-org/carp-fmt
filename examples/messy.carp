@@ -17,3 +17,6 @@
     (IO.println &(str x))
     ; (IO.println "and again")
     ))
+
+(defn ; why is this here
+  answer [] 42)

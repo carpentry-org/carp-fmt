@@ -76,6 +76,7 @@ returns formatted Carp source.")
       (Pair.init nl-pos n)))
 
   ; a comment eats the rest of its line, so no doc holding one can be flat
+  ; a real token this wide collides harmlessly — it cannot fit either
   (def unflattenable-width 1000000)
 
   (private unflattenable?)
@@ -373,10 +374,6 @@ returns formatted Carp source.")
               _ ())
             (let-do [binding? (binding-form? items)]
               (for [i 0 hlc]
-                ; For i>0 the separator is a soft break wrapped in its own
-                ; inner group, so each head separator is independently
-                ; breakable: when head + arg overflows the page width, this
-                ; group breaks while the operator stays alone on its line.
                 (let-do [item-doc (if (and binding? (Int.= i 1))
                            ; bindings array, pair-aware (handles comments
                            ; by emitting them on their own line between pairs)
@@ -385,10 +382,13 @@ returns formatted Carp source.")
                                (bracketed-doc bindings @"[" @"]" 2)
                              _ (form-at items 1))
                            (form-at items i))]
+                  ; a hard separator after a comment would put the next child inside it
                   (set! head-parts
                         (Array.push-back head-parts
-                                         (if (Int.= i 0)
-                                           item-doc
+                                         (cond
+                                           (Int.= i 0) item-doc
+                                           (is-cmt-at? items (Int.dec i))
+                                             (cat (space) item-doc)
                                            (cat (text @" ") item-doc)))))))
             (if paired
               ; Each (pattern, result) pair is its own group: when it fits,
@@ -443,9 +443,10 @@ returns formatted Carp source.")
                                        (Int.= hlc 1)))
                   hang? (and default-call?
                              (and has-body?
-                                  (Int.<=
-                                    @(Pair.a &(flat-width &(form-at items 1)))
-                                    hang-cutoff)))
+                                  (and (not (is-cmt-at? items 0))
+                                       (Int.<=
+                                         @(Pair.a &(flat-width &(form-at items 1)))
+                                         hang-cutoff))))
                   inner (if has-body?
                     (if hang?
                       (cat head-doc (cat (text @" ") (align body-doc)))
