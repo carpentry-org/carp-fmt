@@ -59,6 +59,96 @@
  b)") "
 ") "list containing a comment renders broken")
 
+  (assert-equal t "(defn f []
+  (do
+    (g)
+    ; note
+  ))
+" &(fmt! "(defn f []
+  (do
+    (g)
+    ; note
+    ))") "trailing comment keeps every enclosing closer off its line")
+
+  (assert-equal t "(defn f []
+  [1
+   2
+   ; note
+  ])
+" &(fmt! "(defn f [] [1 2
+ ; note
+ ])") "trailing comment in an array keeps the closer off its line")
+
+  (assert-equal t "(defn f []
+  (g 1
+     ; note
+  ))
+" &(fmt! "(defn f [] (g 1
+ ; note
+ ))") "trailing comment in a plain call keeps the closer off its line")
+
+  ; the multi-line string settles the flat width; the comment after it
+  ; must still break the enclosing forms.
+  (assert-equal t "(defn f []
+  (do
+    (g \"a
+b\")
+    ; note
+  ))
+" &(fmt! "(defn f []
+  (do
+    (g \"a
+b\")
+    ; note
+    ))") "comment after a multi-line string still breaks its ancestors")
+
+  (assert-true t (let [once (fmt! "(defn f []
+  (do
+    (g)
+    ; note
+    ))")
+                       twice (fmt! &once)] (= &once &twice)) "output with a trailing comment reparses and is idempotent")
+
+  (assert-equal t "(defn ; why
+  f
+  []
+  1)
+" &(fmt! "(defn ; why
+  f [] 1)") "a comment among a defn's head children keeps the name out of it")
+
+  (assert-equal t "(defmacro ; why
+  m
+  []
+  1)
+" &(fmt! "(defmacro ; why
+  m [] 1)") "same for a defmacro head line")
+
+  (assert-true t (and (String.contains-string? &(fmt! "(defn- ; c
+  f [] 1)") "; c
+  f") (and (String.contains-string? &(fmt! "(defn-do ; c
+  f [] 1)") "; c
+  f") (String.contains-string? &(fmt! "(defndynamic ; c
+  f [] 1)") "; c
+  f"))) "defn-, defn-do and defndynamic break their head line after a comment too")
+
+  (assert-true t (let [once (fmt! "(defn ; why
+  f [] 1)")
+                       twice (fmt! &once)] (and (= &once &twice)
+                                                (String.contains-string? &once "
+  f
+"))) "formatting twice is stable and still names the function")
+
+  (assert-equal t "(defn f ; c
+  []
+  1)
+" &(fmt! "(defn f ; c
+  [] 1)") "a comment last on the head line leaves that line alone")
+
+  (assert-equal t "(; c
+  foo)
+" &(fmt! "(; c
+  foo)") "a comment where the operator would go doesn't swallow the operand")
+
   (assert-equal t "&x
 " &(fmt! "&x") "ref reader macro")
   (assert-equal t "~x

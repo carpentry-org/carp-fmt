@@ -4,6 +4,7 @@
 (deftype Doc
   (DNil [])
   (DTxt [String])
+  (DCmt [String])
   (DBrk [String])
   (DCat [(Box Doc) (Box Doc)])
   (DNest [Int (Box Doc)])
@@ -51,8 +52,9 @@ returns formatted Carp source.")
            (cat
              (group
                (and (auto-inline? %arr) (or (Int.= %step 1) (Int.<= bn 2)))
-               (align (concat-docs bparts)))
-             (cat (if (last-is-cmt? %arr) (softln) (Doc.DNil)) (text %close))))))
+               (cat (align (concat-docs bparts))
+                    (if (last-is-cmt? %arr) (softln) (Doc.DNil))))
+             (text %close)))))
 
   (defn align [d] (Doc.DAlign (Box.init d)))
 
@@ -73,6 +75,14 @@ returns formatted Carp source.")
         (set! i (Int.inc i)))
       (Pair.init nl-pos n)))
 
+  ; a comment eats the rest of its line, so no doc holding one can be flat
+  ; a real token this wide collides harmlessly — it cannot fit either
+  (def unflattenable-width 1000000)
+
+  (private unflattenable?)
+  (hidden unflattenable?)
+  (defn unflattenable? [w] (Int.>= @(Pair.a w) unflattenable-width))
+
   (defn flat-width [d]
     (match-ref d
       (Doc.DNil) (Pair.init 0 false)
@@ -81,13 +91,15 @@ returns formatted Carp source.")
           (if (Int.>= @(Pair.a &info) 0)
             (Pair.init @(Pair.a &info) true)
             (Pair.init @(Pair.b &info) false)))
+      (Doc.DCmt _) (Pair.init unflattenable-width true)
       (Doc.DBrk s) (Pair.init (String.length s) false)
       (Doc.DCat a b)
-        (let [fa (flat-width (Box.peek a))]
-          (if @(Pair.b &fa)
-            fa
-            (let [fb (flat-width (Box.peek b))]
-              (Pair.init (Int.+ @(Pair.a &fa) @(Pair.a &fb)) @(Pair.b &fb)))))
+        (let [fa (flat-width (Box.peek a))
+              fb (flat-width (Box.peek b))]
+          (cond
+            (unflattenable? &fb) fb
+            @(Pair.b &fa) fa
+            (Pair.init (Int.+ @(Pair.a &fa) @(Pair.a &fb)) @(Pair.b &fb))))
       (Doc.DNest _ inner) (flat-width (Box.peek inner))
       (Doc.DGrp _ inner) (flat-width (Box.peek inner))
       (Doc.DAlign inner) (flat-width (Box.peek inner))))
@@ -114,6 +126,8 @@ returns formatted Carp source.")
             (when (Char.= (String.char-at s i) \newline) (set! last-nl i))
             (set! i (Int.inc i)))
           (if (Int.>= last-nl 0) (Int.- n (Int.inc last-nl)) (Int.+ col n))))
+      (Doc.DCmt s)
+      (do (StringBuf.append-str buf s) (Int.+ col (String.length s)))
       (Doc.DBrk s)
       (if (Int.= 0 mode)
         (do (StringBuf.append-str buf s) (Int.+ col (String.length s)))
@@ -360,10 +374,6 @@ returns formatted Carp source.")
               _ ())
             (let-do [binding? (binding-form? items)]
               (for [i 0 hlc]
-                ; For i>0 the separator is a soft break wrapped in its own
-                ; inner group, so each head separator is independently
-                ; breakable: when head + arg overflows the page width, this
-                ; group breaks while the operator stays alone on its line.
                 (let-do [item-doc (if (and binding? (Int.= i 1))
                            ; bindings array, pair-aware (handles comments
                            ; by emitting them on their own line between pairs)
@@ -372,10 +382,13 @@ returns formatted Carp source.")
                                (bracketed-doc bindings @"[" @"]" 2)
                              _ (form-at items 1))
                            (form-at items i))]
+                  ; a hard separator after a comment would put the next child inside it
                   (set! head-parts
                         (Array.push-back head-parts
-                                         (if (Int.= i 0)
-                                           item-doc
+                                         (cond
+                                           (Int.= i 0) item-doc
+                                           (is-cmt-at? items (Int.dec i))
+                                             (cat (space) item-doc)
                                            (cat (text @" ") item-doc)))))))
             (if paired
               ; Each (pattern, result) pair is its own group: when it fits,
@@ -430,9 +443,10 @@ returns formatted Carp source.")
                                        (Int.= hlc 1)))
                   hang? (and default-call?
                              (and has-body?
-                                  (Int.<=
-                                    @(Pair.a &(flat-width &(form-at items 1)))
-                                    hang-cutoff)))
+                                  (and (not (is-cmt-at? items 0))
+                                       (Int.<=
+                                         @(Pair.a &(flat-width &(form-at items 1)))
+                                         hang-cutoff))))
                   inner (if has-body?
                     (if hang?
                       (cat head-doc (cat (text @" ") (align body-doc)))
@@ -440,11 +454,11 @@ returns formatted Carp source.")
                     head-doc)
                   close-doc (if (last-is-cmt? items) (softln) (Doc.DNil))]
               (cat (text @"(")
-                   (cat (group bias inner) (cat close-doc (text @")")))))))
+                   (cat (group bias (cat inner close-doc)) (text @")"))))))
       (Form.Arr items) (bracketed-doc items @"[" @"]" 1)
       (Form.StaticArr items) (bracketed-doc items @"$[" @"]" 1)
       (Form.Dict items) (bracketed-doc items @"{" @"}" 2)
-      (Form.Cmt s) (text (fmt ";%s" s))
+      (Form.Cmt s) (Doc.DCmt (fmt ";%s" s))
       _ (text (Form.str f))))
 
   (doc format-source "parses `src` via `Reader.parse` and returns
