@@ -1,4 +1,4 @@
-(load "git@github.com:carpentry-org/carp-reader@0.3.7")
+(load "git@github.com:carpentry-org/carp-reader@0.3.9")
 (load "git@github.com:carpentry-org/strbuf@0.1.0")
 
 (deftype Doc
