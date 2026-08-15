@@ -1,5 +1,5 @@
-(load "git@github.com:carpentry-org/carp-reader@0.3.9")
-(load "git@github.com:carpentry-org/strbuf@0.1.0")
+(load "git@github.com:carpentry-org/carp-reader@0.4.0")
+(load "git@github.com:carpentry-org/strbuf@0.2.1")
 
 (deftype Doc
   (DNil [])
