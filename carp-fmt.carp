@@ -32,7 +32,8 @@ returns formatted Carp source.")
   (defmacro form-of [items i]
     `(Located.form (Box.peek (Array.unsafe-nth %items %i))))
 
-  (defmacro form-at [items i] `(form->doc (form-of %items %i)))
+  (defmacro form-at [items i]
+    `(form->doc src (Box.peek (Array.unsafe-nth %items %i))))
 
   (defmacro bracketed-doc [arr open close step]
     `(let-do [bn (Array.length %arr)
@@ -344,8 +345,21 @@ returns formatted Carp source.")
               (and (not (deftype-sum-type? items))
                    (not (defmodule-multi-body? items))))))
 
-  (defn form->doc [f]
-    (match-ref f
+  ; the reader stores a string's decoded value, which cannot tell a written
+  ; `\n` from a newline in the source, so a literal is emitted as written.
+  ; synthesized nodes have no span and fall back to `Form.str`.
+  (private literal-text)
+  (hidden literal-text)
+  (defn literal-text [src l]
+    (let [from @(Info.pos (Located.info l))
+          to @(Info.pos (Located.end l))]
+      (if (and (Int.< from to) (Char.= (String.char-at src from) \"))
+        (String.byte-slice src from to)
+        (Form.str (Located.form l)))))
+
+  (defn form->doc [src l]
+    (match-ref (Located.form l)
+      (Form.Str _) (text (literal-text src l))
       (Form.Lst items)
         (match (reader-macro-of items)
           (Maybe.Just prefix)
@@ -459,7 +473,7 @@ returns formatted Carp source.")
       (Form.StaticArr items) (bracketed-doc items @"$[" @"]" 1)
       (Form.Dict items) (bracketed-doc items @"{" @"}" 2)
       (Form.Cmt s) (Doc.DCmt (fmt ";%s" s))
-      _ (text (Form.str f))))
+      _ (text (Form.str (Located.form l)))))
 
   (doc format-source "parses `src` via `Reader.parse` and returns
 the formatted text, or a `ParseErr` if parsing fails. Top-level
@@ -472,7 +486,7 @@ forms are separated by a single newline; trailing newline is added.")
                  buf (StringBuf.with-capacity (String.length src))]
           (for [i 0 n]
             (let-do [loc (Box.peek (Array.unsafe-nth &forms i))
-                     d (form->doc (Located.form loc))]
+                     d (form->doc src loc)]
               (when (Int.> i 0)
                 (let-do [prev (Box.peek (Array.unsafe-nth &forms (Int.dec i)))
                          prev-end @(Info.line (Located.end prev))

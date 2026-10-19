@@ -243,6 +243,17 @@ b\"") "literal newline inside string stays literal")
   (assert-equal t "\"$-1\\r\\n\"
 " &(fmt! "\"$-1\\r\\n\"") "CRLF in string round-trips as escape pair")
 
+  ; string literals come back as written: an escape stays an escape.
+  (assert-equal t "\"a\\nb\"
+" &(fmt! "\"a\\nb\"") "\\n escape in string stays an escape")
+  (assert-equal t "\"a\\tb \\\"q\\\" \\\\\"
+" &(fmt! "\"a\\tb \\\"q\\\" \\\\\"") "tab, quote and backslash escapes stay as written")
+  (assert-equal t "(defn f [s] (do (IO.println \"a\\nb\") (IO.println s)))
+" &(fmt! "(defn f [s]
+  (do
+    (IO.println \"a\\nb\")
+    (IO.println s)))") "\\n escape lays out like any other short string")
+
   ; char literals above the BMP round-trip through the eight-digit `\U`
   ; escape rather than an un-reparseable five/six-digit `\u` (carp-reader
   ; ≥ 0.3.7); before the bump this source failed to parse outright.
