@@ -1,4 +1,4 @@
-(load "git@github.com:carpentry-org/carp-reader@0.4.3")
+(load "git@github.com:carpentry-org/carp-reader@0.5.1")
 (load "git@github.com:carpentry-org/strbuf@0.3.0")
 
 (deftype Doc
@@ -345,21 +345,25 @@ returns formatted Carp source.")
               (and (not (deftype-sum-type? items))
                    (not (defmodule-multi-body? items))))))
 
-  ; the reader stores a string's decoded value, which cannot tell a written
-  ; `\n` from a newline in the source, so a literal is emitted as written.
+  ; the reader stores a string or char literal's decoded value, which cannot
+  ; tell a written `\n` or `\U0001f600` from the raw character, so a literal is
+  ; emitted as written.
   ; synthesized nodes have no span and fall back to `Form.str`.
   (private literal-text)
   (hidden literal-text)
   (defn literal-text [src l]
     (let [from @(Info.pos (Located.info l))
           to @(Info.pos (Located.end l))]
-      (if (and (Int.< from to) (Char.= (String.char-at src from) \"))
+      (if (and (Int.< from to)
+               (let [c (String.char-at src from)]
+                 (or (Char.= c \") (Char.= c \\))))
         (String.byte-slice src from to)
         (Form.str (Located.form l)))))
 
   (defn form->doc [src l]
     (match-ref (Located.form l)
       (Form.Str _) (text (literal-text src l))
+      (Form.Chr _) (text (literal-text src l))
       (Form.Lst items)
         (match (reader-macro-of items)
           (Maybe.Just prefix)

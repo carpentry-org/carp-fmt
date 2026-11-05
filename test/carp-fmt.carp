@@ -254,11 +254,14 @@ b\"") "literal newline inside string stays literal")
     (IO.println \"a\\nb\")
     (IO.println s)))") "\\n escape lays out like any other short string")
 
-  ; char literals above the BMP round-trip through the eight-digit `\U`
-  ; escape rather than an un-reparseable five/six-digit `\u` (carp-reader
-  ; ≥ 0.3.7); before the bump this source failed to parse outright.
+  ; char literals are emitted as written, so an escape and the raw character
+  ; each keep their spelling.
   (assert-equal t "\\U0001f600
 " &(fmt! "\\U0001f600") "char literal above the BMP round-trips via \\U")
+  (assert-equal t "\\😀
+" &(fmt! "\\😀") "a raw char literal above the BMP stays raw")
+  (assert-equal t "\\u00e9
+" &(fmt! "\\u00e9") "a \\u char escape stays an escape")
 
   ; dict: key/value pairs stay together when the dict spans multiple
   ; lines, like let bindings and deftype fields.
