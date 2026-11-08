@@ -297,6 +297,18 @@ b\"") "literal newline inside string stays literal")
 " &(fmt!
       "(assert-equal test \"expected-result-string\" &(some-function arg1 arg2) \"some descriptive message\")") "assert-equal keeps state arg on head line")
 
+  (assert-equal t "(f
+  (f
+    (f
+      (f
+        (f (f (f (f (f (f (f (f (f (f (f (f x y) y) y) y) y) y) y) y) y) y) y) y)
+        y)
+      y)
+    y)
+  y)
+" &(fmt!
+      "(f (f (f (f (f (f (f (f (f (f (f (f (f (f (f (f x y) y) y) y) y) y) y) y) y) y) y) y) y) y) y) y)") "first-argument chain flows while arg0 is too wide to hang")
+
   (assert-equal t "(defmodule M
   (defn a [] 1)
 
