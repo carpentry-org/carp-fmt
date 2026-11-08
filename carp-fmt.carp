@@ -448,9 +448,7 @@ returns formatted Carp source.")
                                  _ (form-at items i))
                                (form-at items i))]
                       (set! body-parts (Array.push-back body-parts item-doc)))))))
-            (let [head-doc (concat-docs head-parts)
-                  body-doc (concat-docs body-parts)
-                  has-body? (Int.< hlc n)
+            (let [has-body? (Int.< hlc n)
                   bias (auto-inline? items)
                   ; Default function call: choose HANG (align under arg0) only
                   ; when arg0's flat-width fits within `hang-cutoff`, so the
@@ -463,8 +461,11 @@ returns formatted Carp source.")
                              (and has-body?
                                   (and (not (is-cmt-at? items 0))
                                        (Int.<=
-                                         @(Pair.a &(flat-width &(form-at items 1)))
+                                         @(Pair.a
+                                           &(flat-width (Array.unsafe-first &body-parts)))
                                          hang-cutoff))))
+                  head-doc (concat-docs head-parts)
+                  body-doc (concat-docs body-parts)
                   inner (if has-body?
                     (if hang?
                       (cat head-doc (cat (text @" ") (align body-doc)))
